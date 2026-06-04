@@ -37,3 +37,4 @@ desktop.ini
 # Excepciones: mantener archivos de ejemplo si los hay
 !docs/ejemplo_*.jpg
 !docs/ejemplo_*.png
+.venv/
