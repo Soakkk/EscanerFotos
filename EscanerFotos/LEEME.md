@@ -122,3 +122,24 @@ Cosas que se pueden añadir fácil:
 - Detección de rotación automática (orientar texto siempre derecho).
 - Guardar perfiles de ajustes para distintos tipos de documento.
 - Captura desde webcam en tiempo real.
+
+## Actualizaciones automáticas
+
+EscanerFotos se actualiza solo desde GitHub. Al abrir la app, si hay una versión más
+nueva, te avisa con **"Reiniciar e instalar / Más tarde"** y se reemplaza sola.
+
+**Importante:** guarda `EscanerFotos.exe` en una carpeta tuya (Escritorio, Documentos o
+una carpeta propia). Si está en `Archivos de programa`, Windows no le deja actualizarse
+sin permisos de administrador.
+
+### Publicar una versión nueva (desarrollador)
+1. Sube el número en `EscanerFotos/version.py` (p. ej. `2.0` -> `2.1`).
+2. `git commit -am "v2.1"` y `git tag v2.1` y `git push --tags`.
+3. GitHub Actions compila el `.exe` y publica la Release en `EscanerFotos-releases`.
+   Los PCs se actualizan solos al abrir.
+
+### Configuración inicial (una sola vez)
+- Repo `Soakkk/EscanerFotos-releases` creado con un `README`.
+- Secret `RELEASES_TOKEN` (Personal Access Token con permiso de escritura sobre
+  `EscanerFotos-releases`) configurado en `Soakkk/EscanerFotos`.
+- La primera versión se coloca a mano (descargar el primer `.exe` de la Release).
