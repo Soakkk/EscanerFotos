@@ -19,3 +19,11 @@ def es_mas_nueva(remota, local):
     a = a + (0,) * (n - len(a))
     b = b + (0,) * (n - len(b))
     return a > b
+
+
+def elegir_asset_exe(release):
+    """Devuelve el primer asset cuyo nombre acabe en .exe, o None."""
+    for asset in (release or {}).get("assets", []):
+        if str(asset.get("name", "")).lower().endswith(".exe"):
+            return asset
+    return None
