@@ -1,0 +1,51 @@
+name: Compilar ejecutable Windows
+
+# Se ejecuta cuando:
+#  - Subes un tag tipo v1.0, v2.0, etc.  -> genera un Release con el .exe
+#  - Lo lanzas manualmente desde la pestaña Actions -> genera un artefacto descargable
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Descargar codigo
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6 opencv-python numpy Pillow pyinstaller
+
+      - name: Compilar ejecutable
+        run: |
+          pyinstaller --onefile --windowed --name "EscanerFotos" --clean `
+            --collect-all cv2 `
+            EscanerFotos/escaner_fotos.py
+
+      - name: Subir como artefacto (siempre)
+        uses: actions/upload-artifact@v4
+        with:
+          name: EscanerFotos-windows
+          path: dist/EscanerFotos.exe
+
+      - name: Publicar Release con el .exe (solo en tags)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/EscanerFotos.exe
+          generate_release_notes: true
