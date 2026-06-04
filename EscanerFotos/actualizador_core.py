@@ -2,7 +2,6 @@
 se puede importar y probar en cualquier máquina con solo la stdlib."""
 
 import ntpath
-import os
 import re
 
 
