@@ -27,41 +27,64 @@ Doble clic en `EscanerFotos.bat` y a tirar.
 
 Flujo típico para una factura o contrato:
 
-1. **📂 Abrir imagen** → eliges la foto que te ha mandado el cliente.
+1. **📂 Abrir imagen** (o arrastra la foto sobre la ventana) → eliges la foto.
 2. **🔍 Detectar automáticamente** → la app encuentra el papel y lo endereza.
-   - Si la detección no acierta → **✏️ Marcar 4 esquinas a mano** (clic en cada esquina).
+   - Si la detección no acierta → **✏️ Marcar 4 esquinas a mano** (clic en cada esquina;
+     clic derecho o Escape para deshacer).
    - Si el papel ya llena la foto entera → **↺ Usar sin recortar**.
 3. **Tipo de salida**:
    - **B/N escáner** → para facturas, contratos, documentos con mucho texto.
    - **Color con luz corregida** → para DNI, fotos con color importante.
    - **Color original** → si solo quieres recortar sin tocar nada más.
-4. **Ajustes finos** (opcional): brillo, contraste, nitidez si hace falta.
-5. **💾 Guardar como JPG** o **📄 Guardar como PDF**.
+4. **Ajustes finos** (opcional): brillo, contraste, nitidez.
+5. **💾 Guardar** como JPG, PNG o PDF.
+
+
+## Atajos de teclado
+
+| Atajo            | Acción                          |
+|------------------|---------------------------------|
+| Ctrl+O           | Abrir imagen                    |
+| F5               | Detectar automáticamente        |
+| Ctrl+Z           | Deshacer último punto (manual)  |
+| Escape           | Cancelar modo manual            |
+| Ctrl+R           | Resetear ajustes                |
+| Ctrl+S           | Guardar como JPG                |
+| Ctrl+E           | Guardar como PNG                |
+| Ctrl+Shift+S     | Guardar como PDF                |
 
 
 ## Funcionalidades
 
 - Vista lado a lado: foto original vs resultado en tiempo real.
+- Arrastrar y soltar imágenes directamente sobre la ventana.
 - Detección automática de bordes del papel (4 estrategias en cascada).
-- Recorte manual con clic en las 4 esquinas si el automático falla.
+- Recorte manual con clic en las 4 esquinas (clic derecho para deshacer).
 - Rotar 90° / 180° / 270° por si el móvil guardó la foto torcida.
 - 3 modos de salida: B/N escáner, color mejorado, color original.
 - Sliders de brillo, contraste y nitidez con previsualización al instante.
-- Guardar en JPG (calidad 92%) o PDF (200 DPI).
+- Guardar en JPG (calidad 92%), PNG (sin pérdida) o PDF (200 DPI).
+- **PDF multipágina**: acumula varias páginas y expórtalas en un solo PDF.
+- **Procesado por lotes**: procesa una carpeta entera de fotos de golpe.
 
 
 ## ¿Y si quiero un `.exe` de verdad?
 
-Ejecuta `crear_exe.bat`. Tarda 2-5 minutos y te genera un `.exe` único
-en la carpeta `dist\` que puedes copiar a otro ordenador sin necesidad
-de instalar nada más.
+Tienes dos opciones:
+
+1. **En tu PC**: ejecuta `crear_exe.bat`. Tarda 3-7 minutos y te genera un
+   `.exe` único en la carpeta `dist\` que puedes copiar a otro ordenador.
+
+2. **Automático en GitHub**: cada vez que subas un tag de versión
+   (`git tag v2.0 && git push --tags`), GitHub compila el `.exe` solo y lo
+   publica en la sección *Releases* del repositorio, listo para descargar.
 
 
 ## Archivos del proyecto
 
 ```
 EscanerFotos/
-├── escaner_fotos.py    ← El programa (~700 líneas, todo Python + OpenCV)
+├── escaner_fotos.py    ← El programa (~850 líneas, Python + OpenCV)
 ├── instalar.bat        ← Instalación inicial (una sola vez)
 ├── EscanerFotos.bat    ← Lanzador diario (doble clic aquí)
 ├── crear_exe.bat       ← Generar .exe (opcional)
@@ -75,7 +98,7 @@ EscanerFotos/
 - **PySide6** — interfaz gráfica (Qt 6)
 - **OpenCV 4** — procesado de imagen
 - **NumPy** — operaciones numéricas
-- **Pillow** — exportar a PDF
+- **Pillow** — exportar a PDF y PNG
 
 Probado en Windows 10 y 11.
 
@@ -84,20 +107,18 @@ Probado en Windows 10 y 11.
 
 El archivo `escaner_fotos.py` está dividido en tres bloques bien marcados:
 
-1. **Funciones de procesado** (líneas 1-200 aprox) → toda la lógica de
-   imagen. Pura, sin GUI. Aquí es donde tocas si quieres mejorar
-   detección, añadir filtros nuevos, etc.
+1. **Funciones de procesado** → toda la lógica de imagen. Pura, sin GUI.
+   Aquí tocas para mejorar detección, añadir filtros, etc. Incluye
+   `procesar_lote()` para el modo por lotes.
 
-2. **LienzoImagen** (clase QLabel personalizada) → el widget que muestra
-   imágenes y permite hacer clic para marcar puntos.
+2. **LienzoImagen** (clase QLabel personalizada) → widget que muestra
+   imágenes, soporta drag&drop y permite clicar para marcar puntos.
 
-3. **VentanaPrincipal** (la GUI) → cableado de botones, sliders y
-   acciones. Aquí tocas si quieres añadir nuevos botones o cambiar el
-   layout.
+3. **VentanaPrincipal** (la GUI) → cableado de botones, sliders, atajos
+   de teclado y acciones.
 
 Cosas que se pueden añadir fácil:
-- Procesamiento por lotes (procesar una carpeta entera de golpe).
-- Combinar varias páginas en un único PDF.
+- OCR (texto seleccionable en el PDF) con Tesseract.
 - Detección de rotación automática (orientar texto siempre derecho).
 - Guardar perfiles de ajustes para distintos tipos de documento.
-- OCR (pasar a texto seleccionable en el PDF) con Tesseract.
+- Captura desde webcam en tiempo real.
