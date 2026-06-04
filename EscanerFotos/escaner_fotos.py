@@ -34,6 +34,9 @@ from PySide6.QtGui import (
     QKeySequence, QShortcut
 )
 from PySide6.QtCore import Qt, Signal, QSettings, QTimer
+from PySide6.QtCore import QLockFile, QStandardPaths
+from version import __version__
+import actualizador
 
 
 # =============================================================
@@ -522,7 +525,7 @@ class LienzoImagen(QLabel):
 class VentanaPrincipal(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Escáner de Fotos v2 — Documentos limpios desde el móvil")
+        self.setWindowTitle(f"Escáner de Fotos v{__version__} — Documentos limpios desde el móvil")
         self.resize(1500, 900)
         self.setAcceptDrops(True)
 
@@ -1239,8 +1242,29 @@ class VentanaPrincipal(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+
+    # Instancia única: evita dos copias abiertas que bloqueen el .exe al actualizar.
+    ruta_lock = os.path.join(
+        QStandardPaths.writableLocation(QStandardPaths.StandardLocation.TempLocation),
+        "EscanerFotos.lock",
+    )
+    lock = QLockFile(ruta_lock)
+    lock.setStaleLockTime(0)
+    if not lock.tryLock(100):
+        QMessageBox.information(
+            None, "Ya está abierto",
+            "EscanerFotos ya se está ejecutando."
+        )
+        return
+
+    actualizador.limpiar_restos()
+
     ventana = VentanaPrincipal()
     ventana.show()
+
+    # Comprobar actualizaciones poco después de abrir (no bloquea el arranque).
+    QTimer.singleShot(1500, lambda: actualizador.conectar(ventana, __version__))
+
     sys.exit(app.exec())
 
 
