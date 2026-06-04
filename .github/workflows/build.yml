@@ -43,9 +43,11 @@ jobs:
           name: EscanerFotos-windows
           path: dist/EscanerFotos.exe
 
-      - name: Publicar Release con el .exe (solo en tags)
+      - name: Publicar Release en el repo de releases (solo en tags)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          repository: Soakkk/EscanerFotos-releases
+          token: ${{ secrets.RELEASES_TOKEN }}
           files: dist/EscanerFotos.exe
           generate_release_notes: true
