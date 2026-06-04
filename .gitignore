@@ -1,0 +1,39 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# PyInstaller
+dist/
+build/
+*.spec
+
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# IDEs
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Imágenes de prueba (no queremos subir datos personales al repo)
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tiff
+*.tif
+*.webp
+*.pdf
+
+# Excepciones: mantener archivos de ejemplo si los hay
+!docs/ejemplo_*.jpg
+!docs/ejemplo_*.png
