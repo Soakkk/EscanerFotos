@@ -43,6 +43,7 @@ from imagen import (
     rotar_imagen, aplicar_pipeline, leer_imagen, cv_a_pil, procesar_lote,
     buffer_rgb_a_cv,
 )
+from cola import siguiente_de_cola, texto_cola
 
 
 # =============================================================
@@ -61,6 +62,7 @@ class LienzoImagen(QLabel):
     puntos_listos = Signal(list)
     imagen_soltada = Signal(str)   # ruta del archivo soltado
     puntos_editados = Signal(list)   # 4 puntos tras arrastrar una esquina
+    imagenes_soltadas = Signal(list)   # varias rutas soltadas a la vez
 
     def __init__(self):
         super().__init__()
@@ -96,9 +98,11 @@ class LienzoImagen(QLabel):
         event.ignore()
 
     def dropEvent(self, event):
-        urls = event.mimeData().urls()
-        if urls and urls[0].isLocalFile():
-            self.imagen_soltada.emit(urls[0].toLocalFile())
+        exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp')
+        rutas = [u.toLocalFile() for u in event.mimeData().urls()
+                 if u.isLocalFile() and u.toLocalFile().lower().endswith(exts)]
+        if rutas:
+            self.imagenes_soltadas.emit(rutas)
 
     # --- Visualización ---
 
@@ -296,6 +300,10 @@ class VentanaPrincipal(QMainWindow):
         self._preview_base = None    # versión reducida para vista previa fluida
         self._ruta_origen = ""       # carpeta del último archivo abierto
 
+        self.cola = []
+        self.cola_total = 0
+        self.cola_pos = 0
+
         # Preferencias persistentes entre sesiones
         self.settings = QSettings("EscanerFotos", "EscanerFotos")
         self.carpeta_salida = self.settings.value("carpeta_salida", "", str)
@@ -310,6 +318,7 @@ class VentanaPrincipal(QMainWindow):
         self._crear_atajos()
         self._restaurar_preferencias()
         self._actualizar_barra_estado()
+        self.show()
 
     def _restaurar_preferencias(self):
         """Aplica las preferencias guardadas a la interfaz ya construida."""
@@ -374,14 +383,69 @@ class VentanaPrincipal(QMainWindow):
                     return
         event.ignore()
 
+    def _rutas_imagen_de(self, mime):
+        exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp')
+        return [u.toLocalFile() for u in mime.urls()
+                if u.isLocalFile() and u.toLocalFile().lower().endswith(exts)] \
+            if mime.hasUrls() else []
+
     def dropEvent(self, event):
-        urls = event.mimeData().urls()
-        if urls and urls[0].isLocalFile():
-            self._cargar_archivo(urls[0].toLocalFile())
+        rutas = self._rutas_imagen_de(event.mimeData())
+        if rutas:
+            self._iniciar_cola(rutas)
 
     # ----------------------------------------------------------
     # Construcción de la interfaz
     # ----------------------------------------------------------
+
+    def _grupo_plegable(self, titulo, contenido, abierto=False):
+        """QGroupBox 'checkable' cuyo contenido se oculta al desmarcar (plegar)."""
+        g = QGroupBox(titulo)
+        g.setCheckable(True)
+        g.setChecked(abierto)
+        lay = QVBoxLayout(g)
+        lay.setContentsMargins(6, 4, 6, 4)
+        lay.addWidget(contenido)
+        contenido.setVisible(abierto)
+        g.toggled.connect(contenido.setVisible)
+        return g
+
+    def _iniciar_cola(self, rutas):
+        rutas = list(rutas)
+        if not rutas:
+            return
+        self.cola_total = len(rutas)
+        self.cola_pos = 1
+        self.cola = rutas[1:]
+        self._cargar_archivo(rutas[0])
+        self._actualizar_indicador_cola()
+
+    def _cargar_siguiente_de_cola(self):
+        siguiente, resto = siguiente_de_cola(self.cola)
+        self.cola = resto
+        if siguiente is None:
+            n = self.lista_pdf.count()
+            self.cola_total = 0
+            self.cola_pos = 0
+            self._actualizar_indicador_cola()
+            msg = f"Has terminado la tanda.\n{n} página{'s' if n != 1 else ''} en el PDF."
+            QTimer.singleShot(0, lambda: QMessageBox.information(self, "Cola terminada", msg))
+            return
+        self.cola_pos += 1
+        self._cargar_archivo(siguiente)
+        self._actualizar_indicador_cola()
+
+    def terminar_y_siguiente(self):
+        if self.procesada_full() is None:
+            QMessageBox.warning(self, "Atención", "Procesa una imagen primero.")
+            return
+        self.anadir_pagina_pdf()
+        if self.cola_total:
+            self._cargar_siguiente_de_cola()
+
+    def _actualizar_indicador_cola(self):
+        self.lbl_cola.setText(texto_cola(self.cola_pos, self.cola_total))
+        self.lbl_cola.setVisible(bool(self.lbl_cola.text()))
 
     def _crear_interfaz(self):
         central = QWidget()
@@ -399,6 +463,7 @@ class VentanaPrincipal(QMainWindow):
         self.lienzo_original.puntos_listos.connect(self._al_recibir_puntos_manuales)
         self.lienzo_original.puntos_editados.connect(self._al_recibir_puntos_manuales)
         self.lienzo_original.imagen_soltada.connect(self._cargar_archivo)
+        self.lienzo_original.imagenes_soltadas.connect(self._iniciar_cola)
         col_izq.addWidget(self.lienzo_original)
         w_izq = QWidget()
         w_izq.setLayout(col_izq)
@@ -429,7 +494,7 @@ class VentanaPrincipal(QMainWindow):
 
     def _construir_panel_controles(self):
         panel = QVBoxLayout()
-        panel.setSpacing(8)
+        panel.setSpacing(6)
 
         # === 1. Cargar ===
         g1 = QGroupBox("1️⃣  Cargar foto")
@@ -443,19 +508,24 @@ class VentanaPrincipal(QMainWindow):
         l1.addWidget(btn_lote)
         panel.addWidget(g1)
 
+        self.lbl_cola = QLabel("")
+        self.lbl_cola.setStyleSheet(
+            "background:#243; color:#9f9; padding:5px; border-radius:4px; font-weight:bold;")
+        self.lbl_cola.setVisible(False)
+        panel.addWidget(self.lbl_cola)
+
         # === 2. Rotar ===
-        g_rot = QGroupBox("🔄  Rotar (si hace falta)")
-        l_rot = QHBoxLayout(g_rot)
+        cont_rot = QWidget()
+        l_rot = QHBoxLayout(cont_rot)
+        l_rot.setContentsMargins(0, 0, 0, 0)
         btn_rot_izq = QPushButton("⟲ 90° izq")
         btn_rot_der = QPushButton("⟳ 90° der")
         btn_rot_180 = QPushButton("⤢ 180°")
         btn_rot_izq.clicked.connect(lambda: self.rotar_original(270))
         btn_rot_der.clicked.connect(lambda: self.rotar_original(90))
         btn_rot_180.clicked.connect(lambda: self.rotar_original(180))
-        l_rot.addWidget(btn_rot_izq)
-        l_rot.addWidget(btn_rot_der)
-        l_rot.addWidget(btn_rot_180)
-        panel.addWidget(g_rot)
+        l_rot.addWidget(btn_rot_izq); l_rot.addWidget(btn_rot_der); l_rot.addWidget(btn_rot_180)
+        panel.addWidget(self._grupo_plegable("🔄  Rotar", cont_rot, abierto=False))
 
         # === 3. Recortar y enderezar ===
         g2 = QGroupBox("2️⃣  Recortar y enderezar")
@@ -490,18 +560,26 @@ class VentanaPrincipal(QMainWindow):
         panel.addWidget(g3)
 
         # === 5. Ajustes finos ===
-        g4 = QGroupBox("4️⃣  Ajustes finos")
-        l4 = QVBoxLayout(g4)
+        cont_aj = QWidget()
+        l4 = QVBoxLayout(cont_aj)
+        l4.setContentsMargins(0, 0, 0, 0)
         self.sld_brillo,    fila1 = self._crear_slider("Brillo",    -100, 100, 0)
         self.sld_contraste, fila2 = self._crear_slider("Contraste", -100, 100, 0)
         self.sld_nitidez,   fila3 = self._crear_slider("Nitidez",      0, 100, 0)
-        l4.addLayout(fila1)
-        l4.addLayout(fila2)
-        l4.addLayout(fila3)
+        l4.addLayout(fila1); l4.addLayout(fila2); l4.addLayout(fila3)
         btn_reset = QPushButton("↺  Resetear ajustes  (Ctrl+R)")
         btn_reset.clicked.connect(self.reset_ajustes)
         l4.addWidget(btn_reset)
-        panel.addWidget(g4)
+        panel.addWidget(self._grupo_plegable("🎚️  Ajustes finos", cont_aj, abierto=False))
+
+        self.btn_terminar = QPushButton("✓  Añadir al PDF y siguiente  →")
+        self.btn_terminar.setMinimumHeight(46)
+        self.btn_terminar.setStyleSheet(
+            "QPushButton { background-color:#1565c0; color:white; font-size:14px;"
+            " font-weight:bold; border-radius:5px; }"
+            "QPushButton:hover { background-color:#1976d2; }")
+        self.btn_terminar.clicked.connect(self.terminar_y_siguiente)
+        panel.addWidget(self.btn_terminar)
 
         # === 6. Guardar ===
         g5 = QGroupBox("5️⃣  Guardar resultado")
@@ -599,13 +677,12 @@ class VentanaPrincipal(QMainWindow):
     # ----------------------------------------------------------
 
     def abrir_imagen(self):
-        ruta, _ = QFileDialog.getOpenFileName(
-            self, "Abrir imagen", self._ruta_origen,
+        rutas, _ = QFileDialog.getOpenFileNames(
+            self, "Abrir imágenes", self._ruta_origen,
             "Imágenes (*.jpg *.jpeg *.png *.bmp *.tiff *.tif *.webp);;"
-            "Todos los archivos (*.*)"
-        )
-        if ruta:
-            self._cargar_archivo(ruta)
+            "Todos los archivos (*.*)")
+        if rutas:
+            self._iniciar_cola(rutas)
 
     def _cargar_archivo(self, ruta):
         try:
