@@ -1,6 +1,7 @@
 # EscanerFotos/actualizador.py
-"""Capa Qt del actualizador: comprueba GitHub Releases en un hilo, descarga el
-.exe nuevo junto al actual y, tras confirmación, lanza el .bat de reemplazo."""
+"""Capa Qt del actualizador: comprueba GitHub Releases en un hilo, avisa al
+usuario y —si acepta— descarga el instalador con barra de progreso y lo ejecuta
+en silencio. El instalador (Inno Setup) cierra la app, reemplaza y la reabre."""
 
 import os
 import sys
@@ -9,12 +10,12 @@ import tempfile
 import subprocess
 from urllib.request import urlopen, Request
 
-from PySide6.QtCore import QThread, Signal
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtCore import QThread, Signal, Qt
+from PySide6.QtWidgets import QMessageBox, QProgressDialog
 
 from actualizador_core import es_mas_nueva, elegir_asset_exe
 
-API_URL = "https://api.github.com/repos/Soakkk/EscanerFotos-releases/releases/latest"
+API_URL = "https://api.github.com/repos/Soakkk/EscanerFotos/releases/latest"
 
 
 def esta_empaquetada():
@@ -22,11 +23,9 @@ def esta_empaquetada():
     return getattr(sys, "frozen", False)
 
 
-
-
-class HiloActualizacion(QThread):
-    """Comprueba y descarga en segundo plano. Emite (version, ruta_new) si hay update."""
-    encontrada = Signal(str, str)
+class HiloComprobar(QThread):
+    """Comprueba si hay versión nueva (rápido). Emite (version, url, size)."""
+    encontrada = Signal(str, str, int)
 
     def __init__(self, version_local, parent=None):
         super().__init__(parent)
@@ -46,34 +45,48 @@ class HiloActualizacion(QThread):
             if not asset:
                 return
 
-            destino = os.path.join(tempfile.gettempdir(), "EscanerFotos-Setup.exe")
-            if not self._descargar(asset["browser_download_url"],
-                                   destino, asset.get("size")):
-                return
-
-            self.encontrada.emit(tag, destino)
+            self.encontrada.emit(
+                tag, asset["browser_download_url"], int(asset.get("size") or 0)
+            )
         except Exception:
             pass  # sin internet / error -> silencio
 
-    def _descargar(self, url, destino, tam_esperado):
+
+class HiloDescarga(QThread):
+    """Descarga el instalador. Emite progreso (0-100) y terminado(ruta|"")."""
+    progreso = Signal(int)
+    terminado = Signal(str)
+
+    def __init__(self, url, size, parent=None):
+        super().__init__(parent)
+        self.url = url
+        self.size = size
+
+    def run(self):
+        destino = os.path.join(tempfile.gettempdir(), "EscanerFotos-Setup.exe")
         try:
-            req = Request(url, headers={"User-Agent": "EscanerFotos"})
+            req = Request(self.url, headers={"User-Agent": "EscanerFotos"})
+            bajado = 0
             with urlopen(req, timeout=60) as r, open(destino, "wb") as f:
                 while True:
                     trozo = r.read(1024 * 256)
                     if not trozo:
                         break
                     f.write(trozo)
-            if tam_esperado and os.path.getsize(destino) != tam_esperado:
+                    bajado += len(trozo)
+                    if self.size:
+                        self.progreso.emit(int(bajado * 100 / self.size))
+            if self.size and os.path.getsize(destino) != self.size:
                 os.remove(destino)
-                return False
-            return True
+                self.terminado.emit("")
+                return
+            self.terminado.emit(destino)
         except Exception:
             try:
                 os.remove(destino)
             except Exception:
                 pass
-            return False
+            self.terminado.emit("")
 
 
 def _lanzar_instalador(ruta_setup):
@@ -85,30 +98,53 @@ def _lanzar_instalador(ruta_setup):
 
 
 def conectar(ventana, version_local):
-    """Punto de entrada: arranca la comprobación si procede y cablea el diálogo.
+    """Punto de entrada: comprueba actualizaciones y cablea el flujo de aviso.
     Llamar una vez tras mostrar la ventana principal."""
     if not esta_empaquetada():
         return
 
-    def al_encontrar(version, ruta_setup):
+    def al_encontrar(version, url, size):
+        # Aviso INMEDIATO (no se descarga nada hasta que el usuario acepta).
         resp = QMessageBox.question(
             ventana, "Actualización disponible",
             f"Hay una versión nueva de EscanerFotos ({version}).\n\n"
-            "¿Reiniciar e instalarla ahora?",
+            "¿Descargar e instalar ahora?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
-        if resp == QMessageBox.StandardButton.Yes:
-            _lanzar_instalador(ruta_setup)
-            ventana.close()
-        else:
-            # Instalar al cerrar la app (equivalente a autoInstallOnAppQuit).
-            from PySide6.QtWidgets import QApplication
-            QApplication.instance().aboutToQuit.connect(
-                lambda: _lanzar_instalador(ruta_setup)
-            )
+        if resp != QMessageBox.StandardButton.Yes:
+            return  # "Más tarde": volverá a avisar la próxima vez que abra.
 
-    hilo = HiloActualizacion(version_local, parent=ventana)
+        # Descarga con barra de progreso (sin botón cancelar).
+        dlg = QProgressDialog("Descargando actualización…", None, 0, 100, ventana)
+        dlg.setWindowTitle("Actualizando")
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setValue(0)
+
+        hilo_dl = HiloDescarga(url, size, parent=ventana)
+
+        def on_terminado(ruta):
+            dlg.close()
+            if not ruta:
+                QMessageBox.warning(
+                    ventana, "Actualización",
+                    "No se pudo descargar la actualización.\n"
+                    "Revisa tu conexión e inténtalo más tarde."
+                )
+                return
+            _lanzar_instalador(ruta)
+            ventana.close()
+
+        hilo_dl.progreso.connect(dlg.setValue)
+        hilo_dl.terminado.connect(on_terminado)
+        ventana._hilo_descarga = hilo_dl  # evita que el GC lo recoja
+        hilo_dl.start()
+        dlg.show()
+
+    hilo = HiloComprobar(version_local, parent=ventana)
     hilo.encontrada.connect(al_encontrar)
     hilo.start()
-    ventana._hilo_actualizacion = hilo  # evita que el GC lo recoja
+    ventana._hilo_comprobar = hilo  # evita que el GC lo recoja

@@ -37,12 +37,6 @@ jobs:
             --collect-all cv2 `
             EscanerFotos/escaner_fotos.py
 
-      - name: Subir carpeta como artefacto (siempre)
-        uses: actions/upload-artifact@v4
-        with:
-          name: EscanerFotos-windows
-          path: dist/EscanerFotos
-
       - name: Construir instalador con Inno Setup
         shell: pwsh
         run: |
@@ -57,11 +51,9 @@ jobs:
           name: EscanerFotos-Setup
           path: Output/EscanerFotos-Setup-*.exe
 
-      - name: Publicar Release en EscanerFotos-releases (solo en tags)
+      - name: Publicar Release con el instalador (solo en tags)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          repository: Soakkk/EscanerFotos-releases
-          token: ${{ secrets.RELEASES_TOKEN }}
           files: Output/EscanerFotos-Setup-*.exe
           generate_release_notes: true

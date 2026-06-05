@@ -125,19 +125,20 @@ Cosas que se pueden añadir fácil:
 
 ## Actualizaciones automáticas
 
-EscanerFotos ahora se **instala** en tu usuario (con accesos directos en Escritorio y Menú
+EscanerFotos se **instala** en tu usuario (con accesos directos en Escritorio y Menú
 Inicio) y se actualiza solo desde GitHub. La primera vez instalas el `Setup.exe`; a partir
-de ahí, al abrir la app, si hay una versión más nueva te avisa con **"Reiniciar e instalar
-/ Más tarde"** y se actualiza sola (sin permisos de administrador).
+de ahí, al abrir la app, si hay una versión más nueva te **avisa al instante**, y al
+aceptar la **descarga con barra de progreso** y se instala sola (sin permisos de
+administrador).
+
+Todo vive en un único repositorio (`Soakkk/EscanerFotos`): el código y las Releases con el
+instalador. No hace falta ningún token.
 
 ### Publicar una versión nueva (desarrollador)
-1. Sube el número en `EscanerFotos/version.py` (p. ej. `2.0` -> `2.1`).
-2. `git commit -am "v2.1"` y `git tag v2.1` y `git push --tags`.
-3. GitHub Actions compila el `.exe` y publica la Release en `EscanerFotos-releases`.
+1. Sube el número en `EscanerFotos/version.py` (p. ej. `2.1` -> `2.2`).
+2. `git commit -am "v2.2"` y `git tag v2.2` y `git push --tags`.
+3. GitHub Actions compila el instalador y publica la Release en este mismo repositorio.
    Los PCs se actualizan solos al abrir.
 
-### Configuración inicial (una sola vez)
-- Repo `Soakkk/EscanerFotos-releases` creado con un `README`.
-- Secret `RELEASES_TOKEN` (Personal Access Token con permiso de escritura sobre
-  `EscanerFotos-releases`) configurado en `Soakkk/EscanerFotos`.
-- La primera versión se instala a mano (descargar e instalar el primer Setup.exe).
+### Primera instalación
+- Descarga el `Setup.exe` de la última Release e instálalo. A partir de ahí, automático.
