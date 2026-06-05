@@ -556,6 +556,8 @@ class VentanaPrincipal(QMainWindow):
         self.combo_filtro.setMinimumHeight(34)
         self.combo_filtro.currentIndexChanged.connect(self._al_cambiar_filtro)
         l3.addWidget(self.combo_filtro)
+        self.sld_intensidad_bn, fila_int_bn = self._crear_slider("Intensidad B/N", 0, 100, 50)
+        l3.addLayout(fila_int_bn)
         panel.addWidget(g3)
 
         # === 5. Ajustes finos ===
@@ -811,6 +813,7 @@ class VentanaPrincipal(QMainWindow):
             self.sld_brillo.value(),
             self.sld_contraste.value(),
             self.sld_nitidez.value(),
+            self.sld_intensidad_bn.value(),
         )
 
     def _actualizar_preview_base(self):
