@@ -34,14 +34,13 @@ from PySide6.QtGui import (
     QKeySequence, QShortcut, QIcon
 )
 from PySide6.QtCore import Qt, Signal, QSettings, QTimer, QSize
-from PySide6.QtCore import QLockFile, QStandardPaths
+from PySide6.QtCore import QLockFile, QStandardPaths, QByteArray, QBuffer
 from version import __version__
 import actualizador
 from imagen import (
     detectar_documento, corregir_perspectiva, ordenar_puntos,
     filtro_bn_escaner, filtro_color_mejorado, aplicar_ajustes,
     rotar_imagen, aplicar_pipeline, leer_imagen, cv_a_pil, procesar_lote,
-    buffer_rgb_a_cv,
 )
 from cola import siguiente_de_cola, texto_cola
 
@@ -708,28 +707,39 @@ class VentanaPrincipal(QMainWindow):
         self._actualizar_barra_estado()
 
     def _qimage_a_cv(self, qimg):
+        """Convierte un QImage (p. ej. del portapapeles) a array OpenCV BGR.
+        Lo hace serializando a PNG en memoria y decodificando con OpenCV: es
+        robusto en cualquier plataforma y formato (evita el manejo de buffer
+        crudo de constBits(), que falla en Windows)."""
         if qimg.isNull():
             return None
-        qimg = qimg.convertToFormat(QImage.Format.Format_RGB888)
-        b = bytes(qimg.constBits())
-        return buffer_rgb_a_cv(b, qimg.width(), qimg.height(), qimg.bytesPerLine())
+        ba = QByteArray()
+        buf = QBuffer(ba)
+        buf.open(QBuffer.OpenModeFlag.WriteOnly)
+        qimg.save(buf, "PNG")
+        buf.close()
+        data = np.frombuffer(bytes(ba), dtype=np.uint8)
+        return cv2.imdecode(data, cv2.IMREAD_COLOR)
 
     def pegar_imagen(self):
-        cb = QApplication.clipboard()
-        md = cb.mimeData()
-        if md.hasImage():
-            img = self._qimage_a_cv(cb.image())
-            if img is not None and img.size:
-                self._cargar_cv(img)
-                self.statusBar().showMessage("Imagen pegada del portapapeles", 4000)
-                return
-        if md.hasUrls():
-            exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp')
-            for url in md.urls():
-                if url.isLocalFile() and url.toLocalFile().lower().endswith(exts):
-                    self._cargar_archivo(url.toLocalFile())
+        try:
+            cb = QApplication.clipboard()
+            md = cb.mimeData()
+            if md.hasImage():
+                img = self._qimage_a_cv(cb.image())
+                if img is not None and img.size:
+                    self._cargar_cv(img)
+                    self.statusBar().showMessage("Imagen pegada del portapapeles", 4000)
                     return
-        self.statusBar().showMessage("El portapapeles no contiene una imagen", 4000)
+            if md.hasUrls():
+                exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp')
+                for url in md.urls():
+                    if url.isLocalFile() and url.toLocalFile().lower().endswith(exts):
+                        self._cargar_archivo(url.toLocalFile())
+                        return
+            self.statusBar().showMessage("El portapapeles no contiene una imagen", 4000)
+        except Exception as e:
+            self.statusBar().showMessage(f"No se pudo pegar la imagen: {e}", 6000)
 
     def rotar_original(self, grados):
         if self.imagen_original is None:
