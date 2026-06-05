@@ -7,6 +7,18 @@ import numpy as np
 from PIL import Image, ImageOps
 
 
+def igualar_iluminacion(imagen):
+    """Quita sombras y luz irregular: estima la iluminación de fondo con un
+    desenfoque grande y normaliza la imagen dividiéndola por ese fondo.
+    Entra y sale BGR del mismo tamaño."""
+    salida = []
+    for canal in cv2.split(imagen):
+        fondo = cv2.GaussianBlur(canal, (0, 0), sigmaX=25)
+        norm = cv2.divide(canal, fondo, scale=255)
+        salida.append(norm)
+    return cv2.merge(salida)
+
+
 def detectar_documento(imagen):
     """
     Detecta los 4 vértices de un documento dentro de la imagen.
