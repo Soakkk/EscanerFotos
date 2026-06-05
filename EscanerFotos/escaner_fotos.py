@@ -26,7 +26,7 @@ import numpy as np
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QPushButton, QLabel,
     QVBoxLayout, QHBoxLayout, QFileDialog, QSlider, QComboBox,
-    QMessageBox, QGroupBox, QSizePolicy, QProgressDialog
+    QMessageBox, QGroupBox, QSizePolicy, QProgressDialog, QScrollArea
 )
 from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QMouseEvent,
@@ -58,6 +58,7 @@ class LienzoImagen(QLabel):
     """
     puntos_listos = Signal(list)
     imagen_soltada = Signal(str)   # ruta del archivo soltado
+    puntos_editados = Signal(list)   # 4 puntos tras arrastrar una esquina
 
     def __init__(self):
         super().__init__()
@@ -72,6 +73,8 @@ class LienzoImagen(QLabel):
         self.imagen_cv = None
         self.modo_seleccion = False
         self.puntos = []
+        self.modo_editar = False
+        self._idx_arrastrado = None
         self.factor_escala = 1.0
         self.offset_x = 0
         self.offset_y = 0
@@ -104,6 +107,25 @@ class LienzoImagen(QLabel):
     def limpiar_puntos(self):
         self.puntos = []
         self.actualizar_visualizacion()
+
+    def mostrar_esquinas(self, puntos):
+        """Muestra 4 vértices (coords de imagen) que se pueden arrastrar."""
+        self.puntos = [list(p) for p in puntos]
+        self.modo_editar = True
+        self.modo_seleccion = False
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.actualizar_visualizacion()
+
+    def _esquina_cercana(self, x_pix, y_pix):
+        """Índice del vértice cuya posición en pantalla está a <=18 px del clic, o None."""
+        mejor, mejor_d = None, 18.0
+        for i, p in enumerate(self.puntos):
+            px = p[0] * self.factor_escala + self.offset_x
+            py = p[1] * self.factor_escala + self.offset_y
+            d = ((px - x_pix) ** 2 + (py - y_pix) ** 2) ** 0.5
+            if d <= mejor_d:
+                mejor, mejor_d = i, d
+        return mejor
 
     def actualizar_visualizacion(self):
         if self.imagen_cv is None:
@@ -210,6 +232,12 @@ class LienzoImagen(QLabel):
             self.actualizar_visualizacion()
 
     def mousePressEvent(self, event: QMouseEvent):
+        if self.modo_editar and len(self.puntos) == 4 and self.imagen_cv is not None:
+            idx = self._esquina_cercana(event.position().x(), event.position().y())
+            if idx is not None:
+                self._idx_arrastrado = idx
+                return
+
         if not self.modo_seleccion or self.imagen_cv is None:
             return
 
@@ -232,6 +260,22 @@ class LienzoImagen(QLabel):
             self.modo_seleccion = False
             self.setCursor(Qt.CursorShape.ArrowCursor)
             self.puntos_listos.emit(list(self.puntos))
+
+    def mouseMoveEvent(self, event):
+        if self._idx_arrastrado is None:
+            return
+        cx = (event.position().x() - self.offset_x) / self.factor_escala
+        cy = (event.position().y() - self.offset_y) / self.factor_escala
+        h, w = self.imagen_cv.shape[:2]
+        cx = max(0, min(w - 1, cx))
+        cy = max(0, min(h - 1, cy))
+        self.puntos[self._idx_arrastrado] = [cx, cy]
+        self.actualizar_visualizacion()
+
+    def mouseReleaseEvent(self, event):
+        if self._idx_arrastrado is not None:
+            self._idx_arrastrado = None
+            self.puntos_editados.emit([list(p) for p in self.puntos])
 
 
 # =============================================================
@@ -351,13 +395,21 @@ class VentanaPrincipal(QMainWindow):
         col_izq.addWidget(lbl_orig)
         self.lienzo_original = LienzoImagen()
         self.lienzo_original.puntos_listos.connect(self._al_recibir_puntos_manuales)
+        self.lienzo_original.puntos_editados.connect(self._al_recibir_puntos_manuales)
         self.lienzo_original.imagen_soltada.connect(self._cargar_archivo)
         col_izq.addWidget(self.lienzo_original)
         w_izq = QWidget()
         w_izq.setLayout(col_izq)
 
-        # Columna central: controles
+        # Columna central: controles (con scroll para que no se solapen en pantalla completa)
         w_ctrl = self._construir_panel_controles()
+        scroll_ctrl = QScrollArea()
+        scroll_ctrl.setWidgetResizable(True)
+        scroll_ctrl.setWidget(w_ctrl)
+        scroll_ctrl.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_ctrl.setMinimumWidth(330)
+        scroll_ctrl.setMaximumWidth(370)
+        scroll_ctrl.setFrameShape(QScrollArea.Shape.NoFrame)
 
         # Columna derecha: resultado
         col_der = QVBoxLayout()
@@ -370,7 +422,7 @@ class VentanaPrincipal(QMainWindow):
         w_der.setLayout(col_der)
 
         layout.addWidget(w_izq, 4)
-        layout.addWidget(w_ctrl, 0)
+        layout.addWidget(scroll_ctrl, 0)
         layout.addWidget(w_der, 4)
 
     def _construir_panel_controles(self):
@@ -514,7 +566,6 @@ class VentanaPrincipal(QMainWindow):
 
         w = QWidget()
         w.setLayout(panel)
-        w.setMaximumWidth(340)
         w.setMinimumWidth(300)
         return w
 
@@ -596,8 +647,7 @@ class VentanaPrincipal(QMainWindow):
                     "  • Usa «Sin recortar» si el papel ya ocupa toda la foto."
                 )
             return
-        self.lienzo_original.puntos = puntos.tolist()
-        self.lienzo_original.actualizar_visualizacion()
+        self.lienzo_original.mostrar_esquinas(puntos.tolist())
         self.imagen_enderezada = corregir_perspectiva(self.imagen_original, puntos)
         self.lbl_estado_recorte.setText(
             "<span style='color:#3a3'>Recorte automático ✓</span>"
