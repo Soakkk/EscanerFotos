@@ -42,7 +42,7 @@ def test_pipeline_tres_modos_conservan_tamano():
         assert out.dtype == np.uint8
 
 
-from imagen import binarizar_sauvola
+from imagen import binarizar_sauvola, filtro_bn_escaner
 
 def test_sauvola_solo_da_0_y_255_y_conserva_tamano():
     gris = (np.random.rand(70, 90) * 255).astype(np.uint8)
@@ -59,3 +59,15 @@ def test_sauvola_texto_fino_negro_sobre_fondo_con_sombra():
     out = binarizar_sauvola(gris)
     assert out[20:22, 30:130].mean() < 60
     assert out[24:28, 30:130].mean() > 180
+
+
+def _prop_negros(bgr):
+    g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    return float((g < 128).mean())
+
+def test_filtro_bn_intensidad_controla_grosor():
+    img = (np.random.rand(90, 120, 3) * 255).astype(np.uint8)
+    baja = filtro_bn_escaner(img, intensidad=10)
+    alta = filtro_bn_escaner(img, intensidad=90)
+    assert baja.shape == img.shape and baja.dtype == np.uint8
+    assert _prop_negros(alta) >= _prop_negros(baja)

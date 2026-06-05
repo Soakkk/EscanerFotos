@@ -182,16 +182,19 @@ def binarizar_sauvola(gris, ventana=25, k=0.2, R=128.0):
     return np.where(g > T, 255, 0).astype(np.uint8)
 
 
-def filtro_bn_escaner(imagen):
-    """Convierte a B/N tipo escáner. Pensado para usarse tras igualar_iluminacion."""
-    gris = cv2.cvtColor(imagen, cv2.COLOR_BGR2GRAY)
-    gris = cv2.GaussianBlur(gris, (3, 3), 0)
-    bn = cv2.adaptiveThreshold(
-        gris, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        31, 15
-    )
+def filtro_bn_escaner(imagen, intensidad=50):
+    """B/N estilo escáner: iguala la luz, binariza con Sauvola, limpia motas y
+    ajusta el grosor del texto según `intensidad` (0-100, 50 = neutro)."""
+    base = igualar_iluminacion(imagen)
+    gris = cv2.cvtColor(base, cv2.COLOR_BGR2GRAY)
+    bn = binarizar_sauvola(gris, ventana=25, k=0.2)
+    bn = cv2.medianBlur(bn, 3)
+    if intensidad > 55:
+        r = min(3, 1 + (intensidad - 55) // 20)
+        bn = cv2.erode(bn, np.ones((r, r), np.uint8))
+    elif intensidad < 45:
+        r = min(3, 1 + (45 - intensidad) // 20)
+        bn = cv2.dilate(bn, np.ones((r, r), np.uint8))
     return cv2.cvtColor(bn, cv2.COLOR_GRAY2BGR)
 
 
@@ -264,9 +267,9 @@ def leer_imagen(ruta):
     return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
 
-def aplicar_pipeline(base, filtro_idx, brillo, contraste, nitidez):
-    if filtro_idx == 0:        # B/N escáner
-        img = filtro_bn_escaner(igualar_iluminacion(base))
+def aplicar_pipeline(base, filtro_idx, brillo, contraste, nitidez, intensidad_bn=50):
+    if filtro_idx == 0:        # B/N escáner (iguala la luz internamente)
+        img = filtro_bn_escaner(base, intensidad_bn)
     elif filtro_idx == 1:      # Color con luz corregida
         img = filtro_color_mejorado(igualar_iluminacion(base))
     else:                      # Color original
