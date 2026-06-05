@@ -36,9 +36,11 @@ deja el umbral adaptativo actual. Foco exclusivo en el **modo B/N de texto**.
   Binarización pura (entra gris uint8, sale uint8 0/255). Usa `boxFilter` para media y
   media de cuadrados; varianza recortada a ≥0 antes de la raíz.
 - `filtro_bn_escaner(imagen, intensidad=50)` (se reescribe):
-  `igualar_iluminacion` → gris → `binarizar_sauvola` con `k` derivado de `intensidad` →
-  `medianBlur(3)` → BGR. **Intensidad alta = texto más marcado** (mapeo: `intensidad` 0–100
-  → `k` de 0.34 a 0.06, decreciente, default 50 ≈ k 0.20).
+  `igualar_iluminacion` → gris → `binarizar_sauvola` (k=0.2 fijo) → `medianBlur(3)` →
+  ajuste de **grosor del texto** según `intensidad` (erosión/dilatación morfológica del
+  resultado) → BGR. **Intensidad alta = texto más marcado** (>55 erosiona el negro para
+  engrosarlo; <45 lo dilata para adelgazarlo; 50 = neutro). Enfoque morfológico elegido por
+  ser monótono e intuitivo frente a variar `k`.
 - `aplicar_pipeline(base, filtro_idx, brillo, contraste, nitidez, intensidad_bn=50)`:
   pasa `intensidad_bn` a `filtro_bn_escaner` cuando `filtro_idx == 0`.
 
