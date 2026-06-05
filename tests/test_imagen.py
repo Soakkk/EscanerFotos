@@ -40,3 +40,22 @@ def test_pipeline_tres_modos_conservan_tamano():
         out = aplicar_pipeline(img, modo, 0, 0, 0)
         assert out.shape == img.shape, f"modo {modo}"
         assert out.dtype == np.uint8
+
+
+from imagen import binarizar_sauvola
+
+def test_sauvola_solo_da_0_y_255_y_conserva_tamano():
+    gris = (np.random.rand(70, 90) * 255).astype(np.uint8)
+    out = binarizar_sauvola(gris)
+    assert out.shape == gris.shape
+    assert out.dtype == np.uint8
+    assert set(np.unique(out).tolist()).issubset({0, 255})
+
+def test_sauvola_texto_fino_negro_sobre_fondo_con_sombra():
+    h, w = 80, 160
+    gris = np.tile(np.linspace(150, 255, w).astype(np.uint8), (h, 1)).copy()
+    for y in (20, 30, 40, 50, 60):
+        gris[y:y + 2, 30:130] = 15
+    out = binarizar_sauvola(gris)
+    assert out[20:22, 30:130].mean() < 60
+    assert out[24:28, 30:130].mean() > 180

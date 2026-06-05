@@ -166,6 +166,22 @@ def corregir_perspectiva(imagen, puntos):
     )
 
 
+def binarizar_sauvola(gris, ventana=25, k=0.2, R=128.0):
+    """Binarización local de Sauvola (umbral por píxel según media y desviación
+    del entorno). Entra gris uint8, sale uint8 con solo 0 (texto) y 255 (fondo)."""
+    if ventana % 2 == 0:
+        ventana += 1
+    g = gris.astype(np.float32)
+    media = cv2.boxFilter(g, ddepth=-1, ksize=(ventana, ventana),
+                          normalize=True, borderType=cv2.BORDER_REPLICATE)
+    media_sq = cv2.boxFilter(g * g, ddepth=-1, ksize=(ventana, ventana),
+                             normalize=True, borderType=cv2.BORDER_REPLICATE)
+    var = np.clip(media_sq - media * media, 0, None)
+    std = np.sqrt(var)
+    T = media * (1.0 + k * (std / R - 1.0))
+    return np.where(g > T, 255, 0).astype(np.uint8)
+
+
 def filtro_bn_escaner(imagen):
     """Convierte a B/N tipo escáner. Pensado para usarse tras igualar_iluminacion."""
     gris = cv2.cvtColor(imagen, cv2.COLOR_BGR2GRAY)
