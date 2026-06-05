@@ -1257,8 +1257,6 @@ def main():
         )
         return
 
-    actualizador.limpiar_restos()
-
     ventana = VentanaPrincipal()
     ventana.show()
 
