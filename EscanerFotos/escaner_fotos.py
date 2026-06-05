@@ -26,13 +26,14 @@ import numpy as np
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QPushButton, QLabel,
     QVBoxLayout, QHBoxLayout, QFileDialog, QSlider, QComboBox,
-    QMessageBox, QGroupBox, QSizePolicy, QProgressDialog, QScrollArea
+    QMessageBox, QGroupBox, QSizePolicy, QProgressDialog, QScrollArea,
+    QListWidget, QListWidgetItem
 )
 from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QMouseEvent,
-    QKeySequence, QShortcut
+    QKeySequence, QShortcut, QIcon
 )
-from PySide6.QtCore import Qt, Signal, QSettings, QTimer
+from PySide6.QtCore import Qt, Signal, QSettings, QTimer, QSize
 from PySide6.QtCore import QLockFile, QStandardPaths
 from version import __version__
 import actualizador
@@ -40,6 +41,7 @@ from imagen import (
     detectar_documento, corregir_perspectiva, ordenar_puntos,
     filtro_bn_escaner, filtro_color_mejorado, aplicar_ajustes,
     rotar_imagen, aplicar_pipeline, leer_imagen, cv_a_pil, procesar_lote,
+    buffer_rgb_a_cv,
 )
 
 
@@ -292,7 +294,6 @@ class VentanaPrincipal(QMainWindow):
         self.imagen_original = None
         self.imagen_enderezada = None
         self._preview_base = None    # versión reducida para vista previa fluida
-        self.paginas_pdf = []        # acumulador para PDF multipágina
         self._ruta_origen = ""       # carpeta del último archivo abierto
 
         # Preferencias persistentes entre sesiones
@@ -335,6 +336,7 @@ class VentanaPrincipal(QMainWindow):
         QShortcut(QKeySequence("Escape"), self, activated=self.lienzo_original.cancelar_seleccion)
         QShortcut(QKeySequence("Ctrl+Z"), self, activated=self.lienzo_original.deshacer_ultimo_punto)
         QShortcut(QKeySequence("Ctrl+R"), self, activated=self.reset_ajustes)
+        QShortcut(QKeySequence("Ctrl+V"), self, activated=self.pegar_imagen)
 
     # ----------------------------------------------------------
     # Barra de estado
@@ -353,8 +355,8 @@ class VentanaPrincipal(QMainWindow):
         if base is not None:
             hp, wp = base.shape[:2]
             partes.append(f"Resultado: {wp}×{hp} px")
-        if self.paginas_pdf:
-            partes.append(f"PDF batch: {len(self.paginas_pdf)} pág.")
+        if hasattr(self, "lista_pdf") and self.lista_pdf.count():
+            partes.append(f"PDF: {self.lista_pdf.count()} pág.")
         partes.append("Enter: Guardado rápido  |  Ctrl+S: JPG  Ctrl+Shift+S: PDF")
         self.statusBar().showMessage("   |   ".join(partes))
 
@@ -541,25 +543,31 @@ class VentanaPrincipal(QMainWindow):
         l5.addWidget(btn_pdf)
         panel.addWidget(g5)
 
-        # === 7. PDF multipágina ===
-        g6 = QGroupBox("📑  PDF multipágina (varias páginas juntas)")
+        # === PDF de varias fotos (miniaturas reordenables) ===
+        g6 = QGroupBox("📑  PDF de varias fotos (arrastra para ordenar)")
         l6 = QVBoxLayout(g6)
-        btn_añadir = QPushButton("➕  Añadir página actual")
-        btn_añadir.setMinimumHeight(34)
-        btn_añadir.clicked.connect(self.añadir_pagina_pdf)
-        l6.addWidget(btn_añadir)
-        fila_info = QHBoxLayout()
-        self.lbl_paginas = QLabel("<i style='color:#888'>0 páginas en cola</i>")
-        fila_info.addWidget(self.lbl_paginas)
-        btn_vaciar = QPushButton("🗑️ Vaciar")
-        btn_vaciar.setMaximumWidth(70)
-        btn_vaciar.clicked.connect(self.vaciar_paginas_pdf)
-        fila_info.addWidget(btn_vaciar)
-        l6.addLayout(fila_info)
-        btn_exportar_multi = QPushButton("📄  Exportar PDF multipágina")
-        btn_exportar_multi.setMinimumHeight(36)
-        btn_exportar_multi.clicked.connect(self.exportar_pdf_multipagina)
-        l6.addWidget(btn_exportar_multi)
+        self.lista_pdf = QListWidget()
+        self.lista_pdf.setViewMode(QListWidget.ViewMode.IconMode)
+        self.lista_pdf.setIconSize(QSize(80, 104))
+        self.lista_pdf.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.lista_pdf.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        self.lista_pdf.setMinimumHeight(130)
+        l6.addWidget(self.lista_pdf)
+        fila_pdf = QHBoxLayout()
+        btn_add_pdf = QPushButton("➕ Añadir")
+        btn_add_pdf.clicked.connect(self.anadir_pagina_pdf)
+        btn_quitar_pdf = QPushButton("🗑️ Quitar")
+        btn_quitar_pdf.clicked.connect(self.quitar_pagina_pdf)
+        btn_vaciar_pdf = QPushButton("Vaciar")
+        btn_vaciar_pdf.clicked.connect(self.vaciar_paginas_pdf)
+        fila_pdf.addWidget(btn_add_pdf)
+        fila_pdf.addWidget(btn_quitar_pdf)
+        fila_pdf.addWidget(btn_vaciar_pdf)
+        l6.addLayout(fila_pdf)
+        btn_exp_pdf = QPushButton("📄  Exportar PDF")
+        btn_exp_pdf.setMinimumHeight(36)
+        btn_exp_pdf.clicked.connect(self.exportar_pdf_multipagina)
+        l6.addWidget(btn_exp_pdf)
         panel.addWidget(g6)
 
         panel.addStretch()
@@ -604,20 +612,46 @@ class VentanaPrincipal(QMainWindow):
             img = leer_imagen(ruta)
             if img is None:
                 raise ValueError("OpenCV no pudo leer el archivo.")
-            self.imagen_original = img
-            self.imagen_enderezada = None
-            self._ruta_origen = os.path.dirname(ruta)
-            self.lienzo_original.limpiar_puntos()
-            self.lienzo_original.mostrar_imagen(img)
-            self.lbl_estado_recorte.setText("<i style='color:#888'>Sin recortar</i>")
-            self._resetear_sliders()
-            self._actualizar_preview_base()
-            # Intenta recortar y enderezar automáticamente al abrir
-            self.detectar_auto(silencioso=True)
-            self.actualizar_procesado()
-            self._actualizar_barra_estado()
+            self._cargar_cv(img, os.path.dirname(ruta))
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo abrir la imagen:\n{e}")
+
+    def _cargar_cv(self, img, ruta_origen=""):
+        self.imagen_original = img
+        self.imagen_enderezada = None
+        self._ruta_origen = ruta_origen or self._ruta_origen
+        self.lienzo_original.limpiar_puntos()
+        self.lienzo_original.mostrar_imagen(img)
+        self.lbl_estado_recorte.setText("<i style='color:#888'>Sin recortar</i>")
+        self._resetear_sliders()
+        self._actualizar_preview_base()
+        self.detectar_auto(silencioso=True)
+        self.actualizar_procesado()
+        self._actualizar_barra_estado()
+
+    def _qimage_a_cv(self, qimg):
+        if qimg.isNull():
+            return None
+        qimg = qimg.convertToFormat(QImage.Format.Format_RGB888)
+        b = bytes(qimg.constBits())
+        return buffer_rgb_a_cv(b, qimg.width(), qimg.height(), qimg.bytesPerLine())
+
+    def pegar_imagen(self):
+        cb = QApplication.clipboard()
+        md = cb.mimeData()
+        if md.hasImage():
+            img = self._qimage_a_cv(cb.image())
+            if img is not None and img.size:
+                self._cargar_cv(img)
+                self.statusBar().showMessage("Imagen pegada del portapapeles", 4000)
+                return
+        if md.hasUrls():
+            exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp')
+            for url in md.urls():
+                if url.isLocalFile() and url.toLocalFile().lower().endswith(exts):
+                    self._cargar_archivo(url.toLocalFile())
+                    return
+        self.statusBar().showMessage("El portapapeles no contiene una imagen", 4000)
 
     def rotar_original(self, grados):
         if self.imagen_original is None:
@@ -864,53 +898,54 @@ class VentanaPrincipal(QMainWindow):
     # PDF multipágina
     # ----------------------------------------------------------
 
-    def añadir_pagina_pdf(self):
+    def anadir_pagina_pdf(self):
         img = self.procesada_full()
         if img is None:
             QMessageBox.warning(self, "Atención", "Procesa una imagen primero.")
             return
-        self.paginas_pdf.append(cv_a_pil(img))
-        n = len(self.paginas_pdf)
-        self.lbl_paginas.setText(
-            f"<span style='color:#3a3'>{n} página{'s' if n != 1 else ''} en cola</span>"
-        )
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        h, w = rgb.shape[:2]
+        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
+        icono = QIcon(QPixmap.fromImage(qimg).scaled(
+            80, 104, Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation))
+        item = QListWidgetItem(icono, "")
+        item.setData(Qt.ItemDataRole.UserRole, cv_a_pil(img))
+        self.lista_pdf.addItem(item)
+        self.lista_pdf.setCurrentItem(item)
+        self._actualizar_barra_estado()
+
+    def quitar_pagina_pdf(self):
+        fila = self.lista_pdf.currentRow()
+        if fila >= 0:
+            self.lista_pdf.takeItem(fila)
         self._actualizar_barra_estado()
 
     def vaciar_paginas_pdf(self):
-        self.paginas_pdf.clear()
-        self.lbl_paginas.setText("<i style='color:#888'>0 páginas en cola</i>")
+        self.lista_pdf.clear()
         self._actualizar_barra_estado()
 
     def exportar_pdf_multipagina(self):
-        if not self.paginas_pdf:
-            QMessageBox.warning(
-                self, "Atención",
-                "No hay páginas en la cola.\nAñade páginas con «➕ Añadir página actual»."
-            )
+        paginas = [
+            self.lista_pdf.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self.lista_pdf.count())
+        ]
+        if not paginas:
+            QMessageBox.warning(self, "Atención",
+                "No hay páginas. Añade con «➕ Añadir».")
             return
-
         ruta, _ = QFileDialog.getSaveFileName(
-            self, "Exportar PDF multipágina",
-            os.path.join(self._ruta_origen, "documento_multipagina.pdf"),
-            "PDF (*.pdf)"
-        )
+            self, "Exportar PDF",
+            os.path.join(self._ruta_origen, "documento.pdf"), "PDF (*.pdf)")
         if not ruta:
             return
         if not ruta.lower().endswith(".pdf"):
             ruta += ".pdf"
-
         try:
-            self.paginas_pdf[0].save(
-                ruta, "PDF",
-                resolution=200.0,
-                save_all=True,
-                append_images=self.paginas_pdf[1:]
-            )
-            QMessageBox.information(
-                self, "Exportado",
-                f"PDF de {len(self.paginas_pdf)} páginas guardado en:\n{ruta}\n\n"
-                "¿Deseas vaciar la cola de páginas?"
-            )
+            paginas[0].save(ruta, "PDF", resolution=200.0,
+                            save_all=True, append_images=paginas[1:])
+            QMessageBox.information(self, "Exportado",
+                f"PDF de {len(paginas)} páginas guardado en:\n{ruta}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo exportar el PDF:\n{e}")
 
