@@ -30,3 +30,13 @@ def test_buffer_rgb_a_cv_respeta_padding_y_orden_bgr():
     assert out.shape == (2, 2, 3)
     assert tuple(int(x) for x in out[0, 0]) == (0, 0, 255)
     assert tuple(int(x) for x in out[0, 1]) == (0, 255, 0)
+
+
+from imagen import aplicar_pipeline
+
+def test_pipeline_tres_modos_conservan_tamano():
+    img = (np.random.rand(120, 90, 3) * 255).astype(np.uint8)
+    for modo in (0, 1, 2):
+        out = aplicar_pipeline(img, modo, 0, 0, 0)
+        assert out.shape == img.shape, f"modo {modo}"
+        assert out.dtype == np.uint8

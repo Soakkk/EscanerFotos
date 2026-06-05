@@ -167,14 +167,14 @@ def corregir_perspectiva(imagen, puntos):
 
 
 def filtro_bn_escaner(imagen):
-    """Convierte a B/N tipo escáner. Ideal para facturas y contratos."""
+    """Convierte a B/N tipo escáner. Pensado para usarse tras igualar_iluminacion."""
     gris = cv2.cvtColor(imagen, cv2.COLOR_BGR2GRAY)
     gris = cv2.GaussianBlur(gris, (3, 3), 0)
     bn = cv2.adaptiveThreshold(
         gris, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY,
-        25, 12
+        31, 15
     )
     return cv2.cvtColor(bn, cv2.COLOR_GRAY2BGR)
 
@@ -249,19 +249,12 @@ def leer_imagen(ruta):
 
 
 def aplicar_pipeline(base, filtro_idx, brillo, contraste, nitidez):
-    """
-    Aplica el filtro elegido y los ajustes finos a una imagen base.
-    Es la única fuente de verdad del procesado: se usa tanto para la
-    vista previa (sobre imagen reducida) como para el guardado final
-    (sobre imagen a resolución completa) y para el procesado por lotes.
-    """
-    if filtro_idx == 0:
-        img = filtro_bn_escaner(base)
-    elif filtro_idx == 1:
-        img = filtro_color_mejorado(base)
-    else:
+    if filtro_idx == 0:        # B/N escáner
+        img = filtro_bn_escaner(igualar_iluminacion(base))
+    elif filtro_idx == 1:      # Color con luz corregida
+        img = filtro_color_mejorado(igualar_iluminacion(base))
+    else:                      # Color original
         img = base.copy()
-
     if brillo or contraste or nitidez:
         img = aplicar_ajustes(img, brillo, contraste, nitidez)
     return img
