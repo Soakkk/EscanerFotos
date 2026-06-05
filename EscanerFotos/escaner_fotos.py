@@ -318,7 +318,6 @@ class VentanaPrincipal(QMainWindow):
         self._crear_atajos()
         self._restaurar_preferencias()
         self._actualizar_barra_estado()
-        self.show()
 
     def _restaurar_preferencias(self):
         """Aplica las preferencias guardadas a la interfaz ya construida."""
