@@ -31,21 +31,37 @@ jobs:
           python -m pip install --upgrade pip
           pip install PySide6 opencv-python numpy Pillow pyinstaller
 
-      - name: Compilar ejecutable
+      - name: Compilar (carpeta) con PyInstaller
         run: |
-          pyinstaller --onefile --windowed --name "EscanerFotos" --clean `
+          pyinstaller --onedir --windowed --name "EscanerFotos" --clean `
             --collect-all cv2 `
             EscanerFotos/escaner_fotos.py
 
-      - name: Subir como artefacto (siempre)
+      - name: Subir carpeta como artefacto (siempre)
         uses: actions/upload-artifact@v4
         with:
           name: EscanerFotos-windows
-          path: dist/EscanerFotos.exe
+          path: dist/EscanerFotos
 
-      - name: Publicar Release con el .exe (solo en tags)
+      - name: Construir instalador con Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $v = (Select-String -Path EscanerFotos/version.py -Pattern '__version__\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          Write-Host "Versión detectada: $v"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=$v instalador.iss
+
+      - name: Subir instalador como artefacto (siempre)
+        uses: actions/upload-artifact@v4
+        with:
+          name: EscanerFotos-Setup
+          path: Output/EscanerFotos-Setup-*.exe
+
+      - name: Publicar Release en EscanerFotos-releases (solo en tags)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/EscanerFotos.exe
+          repository: Soakkk/EscanerFotos-releases
+          token: ${{ secrets.RELEASES_TOKEN }}
+          files: Output/EscanerFotos-Setup-*.exe
           generate_release_notes: true

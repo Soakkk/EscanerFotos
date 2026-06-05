@@ -19,9 +19,10 @@ v2.0 — Novedades:
 
 import sys
 import os
+from datetime import datetime
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QPushButton, QLabel,
@@ -32,7 +33,10 @@ from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QMouseEvent,
     QKeySequence, QShortcut
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QSettings, QTimer
+from PySide6.QtCore import QLockFile, QStandardPaths
+from version import __version__
+import actualizador
 
 
 # =============================================================
@@ -174,7 +178,9 @@ def corregir_perspectiva(imagen, puntos):
     ], dtype=np.float32)
 
     M = cv2.getPerspectiveTransform(puntos_ordenados, dst)
-    return cv2.warpPerspective(imagen, M, (ancho_max, alto_max))
+    return cv2.warpPerspective(
+        imagen, M, (ancho_max, alto_max), flags=cv2.INTER_CUBIC
+    )
 
 
 def filtro_bn_escaner(imagen):
@@ -247,6 +253,37 @@ def _cv_a_pil(imagen_cv):
     return pil.convert("RGB") if pil.mode != "RGB" else pil
 
 
+def leer_imagen(ruta):
+    """
+    Lee una imagen de disco como array OpenCV BGR, corrigiendo la
+    orientación según los metadatos EXIF (las fotos de móvil a menudo
+    vienen tumbadas). Soporta rutas con caracteres no ASCII.
+    """
+    with Image.open(ruta) as pil:
+        pil = ImageOps.exif_transpose(pil)
+        rgb = np.array(pil.convert("RGB"))
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+
+def aplicar_pipeline(base, filtro_idx, brillo, contraste, nitidez):
+    """
+    Aplica el filtro elegido y los ajustes finos a una imagen base.
+    Es la única fuente de verdad del procesado: se usa tanto para la
+    vista previa (sobre imagen reducida) como para el guardado final
+    (sobre imagen a resolución completa) y para el procesado por lotes.
+    """
+    if filtro_idx == 0:
+        img = filtro_bn_escaner(base)
+    elif filtro_idx == 1:
+        img = filtro_color_mejorado(base)
+    else:
+        img = base.copy()
+
+    if brillo or contraste or nitidez:
+        img = aplicar_ajustes(img, brillo, contraste, nitidez)
+    return img
+
+
 def procesar_lote(carpeta_entrada, carpeta_salida, filtro_idx, brillo, contraste, nitidez, cb_progreso=None):
     """
     Procesa todas las imágenes de carpeta_entrada con los ajustes actuales
@@ -267,8 +304,7 @@ def procesar_lote(carpeta_entrada, carpeta_salida, filtro_idx, brillo, contraste
             cb_progreso(i, len(archivos), nombre)
         try:
             ruta = os.path.join(carpeta_entrada, nombre)
-            data = np.fromfile(ruta, dtype=np.uint8)
-            img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+            img = leer_imagen(ruta)
             if img is None:
                 raise ValueError("OpenCV no pudo leer el archivo")
 
@@ -276,17 +312,11 @@ def procesar_lote(carpeta_entrada, carpeta_salida, filtro_idx, brillo, contraste
             if puntos is not None:
                 img = corregir_perspectiva(img, puntos)
 
-            if filtro_idx == 0:
-                img = filtro_bn_escaner(img)
-            elif filtro_idx == 1:
-                img = filtro_color_mejorado(img)
-
-            if brillo or contraste or nitidez:
-                img = aplicar_ajustes(img, brillo, contraste, nitidez)
+            img = aplicar_pipeline(img, filtro_idx, brillo, contraste, nitidez)
 
             nombre_salida = os.path.splitext(nombre)[0] + ".jpg"
             ruta_salida = os.path.join(carpeta_salida, nombre_salida)
-            ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+            ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])
             if not ok:
                 raise RuntimeError("cv2.imencode falló")
             buf.tofile(ruta_salida)
@@ -495,19 +525,39 @@ class LienzoImagen(QLabel):
 class VentanaPrincipal(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Escáner de Fotos v2 — Documentos limpios desde el móvil")
+        self.setWindowTitle(f"Escáner de Fotos v{__version__} — Documentos limpios desde el móvil")
         self.resize(1500, 900)
         self.setAcceptDrops(True)
 
         self.imagen_original = None
         self.imagen_enderezada = None
-        self.imagen_procesada = None
-        self.paginas_pdf = []       # acumulador para PDF multipágina
-        self._ruta_origen = ""      # carpeta del último archivo abierto
+        self._preview_base = None    # versión reducida para vista previa fluida
+        self.paginas_pdf = []        # acumulador para PDF multipágina
+        self._ruta_origen = ""       # carpeta del último archivo abierto
+
+        # Preferencias persistentes entre sesiones
+        self.settings = QSettings("EscanerFotos", "EscanerFotos")
+        self.carpeta_salida = self.settings.value("carpeta_salida", "", str)
+
+        # Debounce de los sliders para que la vista previa no dé tirones
+        self._timer_preview = QTimer(self)
+        self._timer_preview.setSingleShot(True)
+        self._timer_preview.setInterval(60)
+        self._timer_preview.timeout.connect(self.actualizar_procesado)
 
         self._crear_interfaz()
         self._crear_atajos()
+        self._restaurar_preferencias()
         self._actualizar_barra_estado()
+
+    def _restaurar_preferencias(self):
+        """Aplica las preferencias guardadas a la interfaz ya construida."""
+        idx = self.settings.value("filtro_idx", 0, int)
+        if 0 <= idx < self.combo_filtro.count():
+            self.combo_filtro.blockSignals(True)
+            self.combo_filtro.setCurrentIndex(idx)
+            self.combo_filtro.blockSignals(False)
+        self._actualizar_label_carpeta()
 
     # ----------------------------------------------------------
     # Atajos de teclado
@@ -515,6 +565,9 @@ class VentanaPrincipal(QMainWindow):
 
     def _crear_atajos(self):
         QShortcut(QKeySequence("Ctrl+O"), self, activated=self.abrir_imagen)
+        QShortcut(QKeySequence("Ctrl+G"), self, activated=self.guardado_rapido)
+        QShortcut(QKeySequence(Qt.Key.Key_Return), self, activated=self.guardado_rapido)
+        QShortcut(QKeySequence(Qt.Key.Key_Enter), self, activated=self.guardado_rapido)
         QShortcut(QKeySequence("Ctrl+S"), self, activated=lambda: self.guardar("jpg"))
         QShortcut(QKeySequence("Ctrl+Shift+S"), self, activated=lambda: self.guardar("pdf"))
         QShortcut(QKeySequence("Ctrl+E"), self, activated=lambda: self.guardar("png"))
@@ -536,12 +589,13 @@ class VentanaPrincipal(QMainWindow):
             return
         h, w = self.imagen_original.shape[:2]
         partes = [f"Original: {w}×{h} px"]
-        if self.imagen_procesada is not None:
-            hp, wp = self.imagen_procesada.shape[:2]
+        base = self._base_full()
+        if base is not None:
+            hp, wp = base.shape[:2]
             partes.append(f"Resultado: {wp}×{hp} px")
         if self.paginas_pdf:
             partes.append(f"PDF batch: {len(self.paginas_pdf)} pág.")
-        partes.append("Ctrl+S: JPG  Ctrl+Shift+S: PDF  Ctrl+E: PNG")
+        partes.append("Enter: Guardado rápido  |  Ctrl+S: JPG  Ctrl+Shift+S: PDF")
         self.statusBar().showMessage("   |   ".join(partes))
 
     # ----------------------------------------------------------
@@ -661,7 +715,7 @@ class VentanaPrincipal(QMainWindow):
             "📷 Color original",
         ])
         self.combo_filtro.setMinimumHeight(34)
-        self.combo_filtro.currentIndexChanged.connect(self.actualizar_procesado)
+        self.combo_filtro.currentIndexChanged.connect(self._al_cambiar_filtro)
         l3.addWidget(self.combo_filtro)
         panel.addWidget(g3)
 
@@ -682,7 +736,30 @@ class VentanaPrincipal(QMainWindow):
         # === 6. Guardar ===
         g5 = QGroupBox("5️⃣  Guardar resultado")
         l5 = QVBoxLayout(g5)
-        btn_jpg = QPushButton("💾  Guardar como JPG  (Ctrl+S)")
+
+        # Guardado rápido: destino fijo + nombre por fecha-hora, sin diálogos
+        btn_rapido = QPushButton("⚡  Guardado rápido  (Enter)")
+        btn_rapido.setMinimumHeight(44)
+        btn_rapido.setStyleSheet(
+            "QPushButton { background-color: #2e7d32; color: white;"
+            " font-size: 14px; font-weight: bold; border-radius: 5px; }"
+            "QPushButton:hover { background-color: #388e3c; }"
+        )
+        btn_rapido.clicked.connect(self.guardado_rapido)
+        l5.addWidget(btn_rapido)
+
+        fila_carpeta = QHBoxLayout()
+        self.lbl_carpeta_salida = QLabel()
+        self.lbl_carpeta_salida.setStyleSheet("color:#888; font-size:11px;")
+        self.lbl_carpeta_salida.setWordWrap(True)
+        fila_carpeta.addWidget(self.lbl_carpeta_salida, 1)
+        btn_cambiar_carpeta = QPushButton("📁 Cambiar")
+        btn_cambiar_carpeta.setMaximumWidth(90)
+        btn_cambiar_carpeta.clicked.connect(self.elegir_carpeta_salida)
+        fila_carpeta.addWidget(btn_cambiar_carpeta)
+        l5.addLayout(fila_carpeta)
+
+        btn_jpg = QPushButton("💾  Guardar como… JPG  (Ctrl+S)")
         btn_jpg.setMinimumHeight(36)
         btn_jpg.clicked.connect(lambda: self.guardar("jpg"))
         l5.addWidget(btn_jpg)
@@ -736,7 +813,7 @@ class VentanaPrincipal(QMainWindow):
         lbl_val.setMinimumWidth(35)
         lbl_val.setAlignment(Qt.AlignmentFlag.AlignRight)
         sld.valueChanged.connect(lambda v: lbl_val.setText(str(v)))
-        sld.valueChanged.connect(self.actualizar_procesado)
+        sld.valueChanged.connect(self._programar_actualizacion)
         fila.addWidget(lbl)
         fila.addWidget(sld)
         fila.addWidget(lbl_val)
@@ -757,19 +834,20 @@ class VentanaPrincipal(QMainWindow):
 
     def _cargar_archivo(self, ruta):
         try:
-            data = np.fromfile(ruta, dtype=np.uint8)
-            img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+            img = leer_imagen(ruta)
             if img is None:
                 raise ValueError("OpenCV no pudo leer el archivo.")
             self.imagen_original = img
             self.imagen_enderezada = None
-            self.imagen_procesada = None
             self._ruta_origen = os.path.dirname(ruta)
             self.lienzo_original.limpiar_puntos()
             self.lienzo_original.mostrar_imagen(img)
-            self.lienzo_resultado.mostrar_imagen(img)
             self.lbl_estado_recorte.setText("<i style='color:#888'>Sin recortar</i>")
-            self.reset_ajustes()
+            self._resetear_sliders()
+            self._actualizar_preview_base()
+            # Intenta recortar y enderezar automáticamente al abrir
+            self.detectar_auto(silencioso=True)
+            self.actualizar_procesado()
             self._actualizar_barra_estado()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo abrir la imagen:\n{e}")
@@ -782,22 +860,25 @@ class VentanaPrincipal(QMainWindow):
         self.lienzo_original.limpiar_puntos()
         self.lienzo_original.mostrar_imagen(self.imagen_original)
         self.lbl_estado_recorte.setText("<i style='color:#888'>Sin recortar</i>")
+        self._actualizar_preview_base()
         self.actualizar_procesado()
         self._actualizar_barra_estado()
 
-    def detectar_auto(self):
+    def detectar_auto(self, silencioso=False):
         if self.imagen_original is None:
-            QMessageBox.warning(self, "Atención", "Primero abre una imagen.")
+            if not silencioso:
+                QMessageBox.warning(self, "Atención", "Primero abre una imagen.")
             return
         puntos = detectar_documento(self.imagen_original)
         if puntos is None:
-            QMessageBox.information(
-                self, "Sin detección",
-                "No se ha podido detectar el documento automáticamente.\n\n"
-                "Opciones:\n"
-                "  • Marca las 4 esquinas a mano.\n"
-                "  • Usa «Sin recortar» si el papel ya ocupa toda la foto."
-            )
+            if not silencioso:
+                QMessageBox.information(
+                    self, "Sin detección",
+                    "No se ha podido detectar el documento automáticamente.\n\n"
+                    "Opciones:\n"
+                    "  • Marca las 4 esquinas a mano.\n"
+                    "  • Usa «Sin recortar» si el papel ya ocupa toda la foto."
+                )
             return
         self.lienzo_original.puntos = puntos.tolist()
         self.lienzo_original.actualizar_visualizacion()
@@ -805,6 +886,7 @@ class VentanaPrincipal(QMainWindow):
         self.lbl_estado_recorte.setText(
             "<span style='color:#3a3'>Recorte automático ✓</span>"
         )
+        self._actualizar_preview_base()
         self.actualizar_procesado()
 
     def iniciar_manual(self):
@@ -824,6 +906,7 @@ class VentanaPrincipal(QMainWindow):
         self.lbl_estado_recorte.setText(
             "<span style='color:#3a3'>Recorte manual ✓</span>"
         )
+        self._actualizar_preview_base()
         self.actualizar_procesado()
 
     def usar_sin_recortar(self):
@@ -834,40 +917,140 @@ class VentanaPrincipal(QMainWindow):
         self.lbl_estado_recorte.setText(
             "<span style='color:#888'><i>Sin recortar</i></span>"
         )
+        self._actualizar_preview_base()
         self.actualizar_procesado()
 
-    def actualizar_procesado(self):
-        base = self.imagen_enderezada if self.imagen_enderezada is not None else self.imagen_original
+    # --- Procesado: vista previa (rápida) vs. resolución completa ---
+
+    def _base_full(self):
+        """Imagen base a resolución completa (enderezada si la hay)."""
+        if self.imagen_enderezada is not None:
+            return self.imagen_enderezada
+        return self.imagen_original
+
+    def _params(self):
+        """Parámetros actuales de filtro y ajustes finos."""
+        return (
+            self.combo_filtro.currentIndex(),
+            self.sld_brillo.value(),
+            self.sld_contraste.value(),
+            self.sld_nitidez.value(),
+        )
+
+    def _actualizar_preview_base(self):
+        """Reduce la base a máx. 1400 px para que la vista previa vuele."""
+        base = self._base_full()
         if base is None:
+            self._preview_base = None
             return
-
-        modo = self.combo_filtro.currentIndex()
-        if modo == 0:
-            img = filtro_bn_escaner(base)
-        elif modo == 1:
-            img = filtro_color_mejorado(base)
+        h, w = base.shape[:2]
+        m = max(h, w)
+        if m > 1400:
+            r = 1400.0 / m
+            self._preview_base = cv2.resize(
+                base, None, fx=r, fy=r, interpolation=cv2.INTER_AREA
+            )
         else:
-            img = base.copy()
+            self._preview_base = base
 
-        b = self.sld_brillo.value()
-        c = self.sld_contraste.value()
-        n = self.sld_nitidez.value()
-        if b or c or n:
-            img = aplicar_ajustes(img, b, c, n)
+    def _programar_actualizacion(self):
+        """Reinicia el temporizador de debounce de los sliders."""
+        self._timer_preview.start()
 
-        self.imagen_procesada = img
+    def procesada_full(self):
+        """Procesa la base a resolución completa con los parámetros actuales."""
+        base = self._base_full()
+        if base is None:
+            return None
+        return aplicar_pipeline(base, *self._params())
+
+    def actualizar_procesado(self):
+        """Refresca solo la vista previa (sobre la imagen reducida)."""
+        if self._preview_base is None:
+            self.lienzo_resultado.mostrar_imagen(None)
+            return
+        img = aplicar_pipeline(self._preview_base, *self._params())
         self.lienzo_resultado.mostrar_imagen(img)
         self._actualizar_barra_estado()
 
-    def reset_ajustes(self):
+    def _resetear_sliders(self):
         for sld in (self.sld_brillo, self.sld_contraste, self.sld_nitidez):
             sld.blockSignals(True)
             sld.setValue(0)
             sld.blockSignals(False)
+
+    def reset_ajustes(self):
+        self._resetear_sliders()
         self.actualizar_procesado()
 
+    def _al_cambiar_filtro(self, idx):
+        self.settings.setValue("filtro_idx", idx)
+        self.actualizar_procesado()
+
+    # ----------------------------------------------------------
+    # Guardado rápido (carpeta fija + nombre por fecha-hora)
+    # ----------------------------------------------------------
+
+    def _actualizar_label_carpeta(self):
+        if self.carpeta_salida:
+            self.lbl_carpeta_salida.setText(
+                f"Carpeta: <b>{self.carpeta_salida}</b>"
+            )
+        else:
+            self.lbl_carpeta_salida.setText(
+                "<i>Sin carpeta fija — se preguntará la primera vez</i>"
+            )
+
+    def elegir_carpeta_salida(self):
+        inicio = self.carpeta_salida or self._ruta_origen
+        carpeta = QFileDialog.getExistingDirectory(
+            self, "Elige la carpeta donde guardar los escaneos", inicio
+        )
+        if carpeta:
+            self.carpeta_salida = carpeta
+            self.settings.setValue("carpeta_salida", carpeta)
+            self._actualizar_label_carpeta()
+        return bool(self.carpeta_salida)
+
+    def _nombre_por_fecha(self, carpeta, ext=".jpg"):
+        """Genera 'AAAA-MM-DD_HH-MM-SS.jpg', evitando pisar archivos."""
+        base = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        ruta = os.path.join(carpeta, base + ext)
+        n = 2
+        while os.path.exists(ruta):
+            ruta = os.path.join(carpeta, f"{base}_{n}{ext}")
+            n += 1
+        return ruta
+
+    def guardado_rapido(self):
+        img = self.procesada_full()
+        if img is None:
+            QMessageBox.warning(self, "Atención", "No hay nada que guardar todavía.")
+            return
+
+        # Asegura una carpeta de destino válida (la pide solo la 1ª vez)
+        if not self.carpeta_salida or not os.path.isdir(self.carpeta_salida):
+            if not self.elegir_carpeta_salida():
+                return
+
+        ruta = self._nombre_por_fecha(self.carpeta_salida, ".jpg")
+        try:
+            ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            if not ok:
+                raise RuntimeError("Error codificando JPEG")
+            buf.tofile(ruta)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo guardar:\n{e}")
+            return
+
+        # Aviso no bloqueante en la barra de estado (no frena el flujo)
+        self.statusBar().showMessage(
+            f"✅ Guardado: {os.path.basename(ruta)}  →  {self.carpeta_salida}", 6000
+        )
+
     def guardar(self, formato):
-        if self.imagen_procesada is None:
+        img = self.procesada_full()
+        if img is None:
             QMessageBox.warning(self, "Atención", "No hay nada que guardar todavía.")
             return
 
@@ -877,8 +1060,9 @@ class VentanaPrincipal(QMainWindow):
             "pdf": ("PDF (*.pdf)", ".pdf", "documento.pdf"),
         }
         filtro, ext, nombre_def = formatos[formato]
+        carpeta_def = self.carpeta_salida or self._ruta_origen
         ruta, _ = QFileDialog.getSaveFileName(
-            self, "Guardar como", os.path.join(self._ruta_origen, nombre_def), filtro
+            self, "Guardar como", os.path.join(carpeta_def, nombre_def), filtro
         )
         if not ruta:
             return
@@ -888,24 +1072,20 @@ class VentanaPrincipal(QMainWindow):
         try:
             if formato == "jpg":
                 ok, buf = cv2.imencode(
-                    ".jpg", self.imagen_procesada,
-                    [cv2.IMWRITE_JPEG_QUALITY, 92]
+                    ".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95]
                 )
                 if not ok:
                     raise RuntimeError("Error codificando JPEG")
                 buf.tofile(ruta)
             elif formato == "png":
                 ok, buf = cv2.imencode(
-                    ".png", self.imagen_procesada,
-                    [cv2.IMWRITE_PNG_COMPRESSION, 3]
+                    ".png", img, [cv2.IMWRITE_PNG_COMPRESSION, 3]
                 )
                 if not ok:
                     raise RuntimeError("Error codificando PNG")
                 buf.tofile(ruta)
             else:
-                _cv_a_pil(self.imagen_procesada).save(
-                    ruta, "PDF", resolution=200.0
-                )
+                _cv_a_pil(img).save(ruta, "PDF", resolution=200.0)
 
             QMessageBox.information(
                 self, "Guardado",
@@ -919,10 +1099,11 @@ class VentanaPrincipal(QMainWindow):
     # ----------------------------------------------------------
 
     def añadir_pagina_pdf(self):
-        if self.imagen_procesada is None:
+        img = self.procesada_full()
+        if img is None:
             QMessageBox.warning(self, "Atención", "Procesa una imagen primero.")
             return
-        self.paginas_pdf.append(_cv_a_pil(self.imagen_procesada))
+        self.paginas_pdf.append(_cv_a_pil(img))
         n = len(self.paginas_pdf)
         self.lbl_paginas.setText(
             f"<span style='color:#3a3'>{n} página{'s' if n != 1 else ''} en cola</span>"
@@ -974,7 +1155,7 @@ class VentanaPrincipal(QMainWindow):
     def procesar_carpeta(self):
         carpeta_ent = QFileDialog.getExistingDirectory(
             self, "Selecciona la carpeta con las fotos a procesar",
-            self._ruta_origen
+            self.carpeta_salida or self._ruta_origen
         )
         if not carpeta_ent:
             return
@@ -984,8 +1165,8 @@ class VentanaPrincipal(QMainWindow):
         carpeta_sal_def = os.path.join(os.path.dirname(carpeta_ent), nombre_salida)
         carpeta_sal = QFileDialog.getExistingDirectory(
             self,
-            f"Carpeta de salida (se creará «{nombre_salida}» si no existe)",
-            os.path.dirname(carpeta_ent)
+            f"Carpeta de salida (vacío = se creará «{nombre_salida}»)",
+            carpeta_sal_def
         )
         if not carpeta_sal:
             carpeta_sal = carpeta_sal_def
@@ -1061,8 +1242,27 @@ class VentanaPrincipal(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+
+    # Instancia única: evita dos copias abiertas que bloqueen el .exe al actualizar.
+    ruta_lock = os.path.join(
+        QStandardPaths.writableLocation(QStandardPaths.StandardLocation.TempLocation),
+        "EscanerFotos.lock",
+    )
+    lock = QLockFile(ruta_lock)
+    lock.setStaleLockTime(0)
+    if not lock.tryLock(100):
+        QMessageBox.information(
+            None, "Ya está abierto",
+            "EscanerFotos ya se está ejecutando."
+        )
+        return
+
     ventana = VentanaPrincipal()
     ventana.show()
+
+    # Comprobar actualizaciones poco después de abrir (no bloquea el arranque).
+    QTimer.singleShot(1500, lambda: actualizador.conectar(ventana, __version__))
+
     sys.exit(app.exec())
 
 
