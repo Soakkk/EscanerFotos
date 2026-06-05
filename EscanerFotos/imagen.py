@@ -19,6 +19,13 @@ def igualar_iluminacion(imagen):
     return cv2.merge(salida)
 
 
+def buffer_rgb_a_cv(buffer, w, h, bytes_per_line):
+    """Convierte un buffer RGB888 (con posible padding por fila) en imagen BGR OpenCV."""
+    arr = np.frombuffer(buffer, dtype=np.uint8).reshape(h, bytes_per_line)
+    arr = arr[:, : w * 3].reshape(h, w, 3)
+    return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+
+
 def detectar_documento(imagen):
     """
     Detecta los 4 vértices de un documento dentro de la imagen.

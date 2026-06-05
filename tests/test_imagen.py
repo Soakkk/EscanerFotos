@@ -16,3 +16,17 @@ def test_igualar_iluminacion_uniformiza_un_gradiente():
     g_in = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).std()
     g_out = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY).std()
     assert g_out < g_in
+
+
+from imagen import buffer_rgb_a_cv
+
+def test_buffer_rgb_a_cv_respeta_padding_y_orden_bgr():
+    w, h = 2, 2
+    bpl = w * 3 + 2
+    fila0 = bytes([255, 0, 0,  0, 255, 0]) + bytes([0, 0])
+    fila1 = bytes([0, 0, 255,  9, 9, 9]) + bytes([0, 0])
+    buf = fila0 + fila1
+    out = buffer_rgb_a_cv(buf, w, h, bpl)
+    assert out.shape == (2, 2, 3)
+    assert tuple(int(x) for x in out[0, 0]) == (0, 0, 255)
+    assert tuple(int(x) for x in out[0, 1]) == (0, 255, 0)
