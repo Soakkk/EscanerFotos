@@ -19,7 +19,8 @@ Aplicación de escritorio para Windows que convierte fotos de documentos hechas 
 | 🔍 Detección automática | 4 estrategias (Canny, umbral adaptativo, HSV, Otsu); se elige el mejor candidato por puntuación |
 | ✏️ Selección manual | Clic en las 4 esquinas; clic derecho / Escape para deshacer |
 | 🔄 Rotar | 90° / 180° / 270° por si el móvil guardó la foto torcida |
-| ⚪ B/N escáner | Binarización Sauvola adaptada a la resolución. Ideal para facturas y contratos |
+| ⚪ B/N nítido | Estilo CamScanner: máscara de tinta Sauvola + contraste adaptativo; texto suave y completo, fondo blanco puro |
+| ⬛ B/N puro tinta | Binario de 1 bit con limpieza de motas inteligente; PDFs de decenas de KB (CCITT G4) |
 | 🎨 Color mejorado | CLAHE + balance de blancos gray-world + filtro bilateral |
 | 📷 Color original | Solo recorte, sin retocar color |
 | 🎚️ Ajustes finos | Brillo, contraste y nitidez con sliders en tiempo real |

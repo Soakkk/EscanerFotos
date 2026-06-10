@@ -33,7 +33,10 @@ Flujo típico para una factura o contrato:
      clic derecho o Escape para deshacer).
    - Si el papel ya llena la foto entera → **↺ Usar sin recortar**.
 3. **Tipo de salida**:
-   - **B/N escáner** → para facturas, contratos, documentos con mucho texto.
+   - **B/N nítido** → para facturas, contratos y texto: limpio y suave,
+     estilo CamScanner. Es el recomendado.
+   - **B/N puro tinta** → solo negro y blanco puros; los PDFs ocupan
+     poquísimo. Para archivar mucho volumen.
    - **Color con luz corregida** → para DNI, fotos con color importante.
    - **Color original** → si solo quieres recortar sin tocar nada más.
 4. **Ajustes finos** (opcional): brillo, contraste, nitidez.

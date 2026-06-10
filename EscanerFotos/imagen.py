@@ -224,17 +224,109 @@ def binarizar_sauvola(gris, ventana=25, k=0.2, R=128.0):
     return np.where(g > T, 255, 0).astype(np.uint8)
 
 
-def filtro_bn_escaner(imagen, intensidad=50):
-    """B/N estilo escáner: iguala la luz, binariza con Sauvola, limpia motas y
-    ajusta el grosor del texto según `intensidad` (0-100, 50 = neutro).
-    Los tamaños de ventana/kernel se escalan con la resolución para que la
-    vista previa (reducida a ~1400 px) coincida con el guardado a tamaño real."""
+def _aplanar_fondo(gris):
+    """Lleva el fondo del documento a blanco uniforme: estima la iluminación
+    con un cierre morfológico a baja resolución (el cierre borra la tinta,
+    cosa que un desenfoque no hace: evita halos alrededor del texto) y
+    divide la imagen por ese fondo. Independiente de la resolución.
+    El fondo se acota por abajo para no amplificar el ruido de las zonas
+    muy oscuras (sombras profundas)."""
+    h, w = gris.shape[:2]
+    factor = max(1, max(h, w) // 700)
+    peq = cv2.resize(gris, (max(1, w // factor), max(1, h // factor)),
+                     interpolation=cv2.INTER_AREA)
+    # Mediana grande: borra el texto (los trazos son minoría en la ventana)
+    # y, a diferencia de un cierre morfológico, no se deja arrastrar por
+    # píxeles "sal" brillantes del ruido o del JPEG.
+    fondo = cv2.medianBlur(peq, 21)
+    fondo = cv2.GaussianBlur(fondo, (0, 0), 3)
+    fondo = cv2.resize(fondo, (w, h), interpolation=cv2.INTER_LINEAR)
+    return cv2.divide(gris, np.maximum(fondo, 50), scale=255)
+
+
+def _quitar_motas(bn, area_min, escala=1.0):
+    """Borra las manchas negras pequeñas Y aisladas (ruido). Una mancha
+    pequeña pegada a un trazo grande se conserva: así sobreviven los puntos,
+    tildes y comas, que siempre están junto al texto. 0 = tinta, 255 = fondo."""
+    inv = (bn == 0).astype(np.uint8)
+    n, etiquetas, stats, _ = cv2.connectedComponentsWithStats(inv, connectivity=8)
+    areas = stats[:, cv2.CC_STAT_AREA]
+    pequenas = areas < area_min
+    pequenas[0] = False
+    if not pequenas.any():
+        return bn
+    grandes = ~pequenas
+    grandes[0] = False
+    cerca = np.isin(etiquetas, np.where(grandes)[0]).astype(np.uint8)
+    lado = int(round(15 * escala)) | 1
+    cerca = cv2.dilate(cerca, np.ones((lado, lado), np.uint8))
+    quitar = np.isin(etiquetas, np.where(pequenas)[0]) & (cerca == 0)
+    salida = bn.copy()
+    salida[quitar] = 255
+    return salida
+
+
+def _mascara_tinta(plano, escala, k=0.12, contraste_min=40):
+    """Máscara de tinta (0 = trazo, 255 = fondo) sobre la imagen aplanada:
+    Sauvola + un contraste mínimo frente al blanco global (la imagen ya
+    viene con el fondo aplanado a ~255: el ruido de las sombras solo baja
+    ~30 niveles y se descarta; la tinta real baja bastante más) + limpieza
+    de motas aisladas. La máscara decide QUÉ es texto; el tono lo pone
+    cada filtro."""
+    ventana = int(round(31 * escala)) | 1
+    mascara = binarizar_sauvola(plano, ventana=ventana, k=k)
+    mascara[plano > 255 - contraste_min] = 255
+    return _quitar_motas(mascara, max(6, int(round(12 * escala * escala))), escala)
+
+
+def _preparar_bn(imagen):
+    """Trabajo común de los dos filtros B/N: aplanar la iluminación, realzar
+    los trazos (ayuda a Sauvola a ver el texto débil) y calcular la máscara
+    de tinta. Devuelve (escala, realzado, mascara)."""
     escala = max(1.0, max(imagen.shape[:2]) / 1400.0)
-    base = igualar_iluminacion(imagen)
-    gris = cv2.cvtColor(base, cv2.COLOR_BGR2GRAY)
-    ventana = int(round(25 * escala)) | 1
-    bn = binarizar_sauvola(gris, ventana=ventana, k=0.2)
-    bn = cv2.medianBlur(bn, 3 if escala < 1.5 else 5)
+    gris = cv2.cvtColor(imagen, cv2.COLOR_BGR2GRAY)
+    plano = _aplanar_fondo(gris)
+    suave = cv2.GaussianBlur(plano, (0, 0), 1.0 * escala)
+    realzado = cv2.addWeighted(plano, 1.6, suave, -0.6, 0)
+    mascara = _mascara_tinta(cv2.medianBlur(realzado, 3), escala)
+    return escala, realzado, mascara
+
+
+def filtro_bn_escaner(imagen, intensidad=50):
+    """B/N estilo escáner con texto nítido (estilo CamScanner).
+    1) Aplana la iluminación y realza los trazos.
+    2) Decide qué es tinta con una máscara Sauvola despeckleada
+       (el fondo queda blanco PURO, sin motas grises).
+    3) Dentro de la tinta estira el contraste según los percentiles de la
+       propia tinta (el trazo más oscuro va a negro aunque la foto sea
+       floja) y conserva bordes antialiasados: texto nítido, no pixelado.
+    `intensidad` (0-100): cuánto se oscurece la tinta (50 = neutro)."""
+    escala, realzado, mascara = _preparar_bn(imagen)
+
+    # La zona de tinta se ensancha 1-2 px para conservar el borde suave
+    lado = 2 * int(round(escala)) + 1
+    zona_tinta = cv2.erode(mascara, np.ones((lado, lado), np.uint8)) == 0
+
+    tinta = realzado[mascara == 0]
+    if tinta.size < 50:           # página prácticamente en blanco
+        return cv2.cvtColor(np.full(imagen.shape[:2], 255, np.uint8),
+                            cv2.COLOR_GRAY2BGR)
+    negro = float(np.percentile(tinta, 20))
+    blanco = min(max(float(np.percentile(tinta, 92)), negro + 40.0), 240.0)
+    norm = np.clip((realzado.astype(np.float32) - negro) / (blanco - negro), 0, 1)
+    gamma = 0.65 + 0.013 * float(intensidad)   # 0.65 .. 1.95 (50 -> 1.3)
+    rampa = (norm ** gamma) * 255.0
+
+    out = np.where(zona_tinta, rampa, 255.0).astype(np.uint8)
+    return cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
+
+
+def filtro_bn_puro(imagen, intensidad=50):
+    """B/N de 1 bit (solo negro y blanco puros): la misma máscara de tinta
+    que el B/N nítido, pero sin medios tonos. Produce PDFs mínimos
+    (se incrustan con CCITT G4).
+    `intensidad` (0-100) ajusta el grosor del trazo (50 = neutro)."""
+    escala, _, bn = _preparar_bn(imagen)
     if intensidad > 55:
         r = min(3, 1 + (intensidad - 55) // 20)
     elif intensidad < 45:
@@ -396,9 +488,11 @@ def leer_imagen(ruta):
 
 
 def aplicar_pipeline(base, filtro_idx, brillo, contraste, nitidez, intensidad_bn=50):
-    if filtro_idx == 0:        # B/N escáner (iguala la luz internamente)
+    if filtro_idx == 0:        # B/N nítido (texto suave, estilo CamScanner)
         img = filtro_bn_escaner(base, intensidad_bn)
-    elif filtro_idx == 1:      # Color con luz corregida
+    elif filtro_idx == 1:      # B/N puro tinta (1 bit, PDFs mínimos)
+        img = filtro_bn_puro(base, intensidad_bn)
+    elif filtro_idx == 2:      # Color con luz corregida
         img = filtro_color_mejorado(igualar_iluminacion(base))
     else:                      # Color original
         img = base.copy()
