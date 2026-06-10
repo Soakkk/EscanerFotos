@@ -8,6 +8,8 @@ tipo escáner: enderezadas, recortadas y con el texto legible.
 Sin IA. Basado en OpenCV.
 
 v2.7 — Novedades:
+  • Icono propio y tema visual oscuro coherente (estilo.py)
+  • Panel reordenado en 5 pasos: cargar, recortar, salida, guardar, PDF
   • Carpeta vigilada: las fotos nuevas (WhatsApp) entran solas a la cola
   • Prefijo de nombre de archivo (cliente/concepto) en el guardado
   • DNI 2 en 1: las dos caras del DNI en una sola hoja A4 del PDF
@@ -38,6 +40,7 @@ from PySide6.QtCore import QLockFile, QStandardPaths, QByteArray, QBuffer
 from PySide6.QtCore import QFileSystemWatcher
 from version import __version__
 import actualizador
+import estilo
 from imagen import (
     detectar_documento, corregir_perspectiva, rotar_imagen, aplicar_pipeline,
     leer_imagen, procesar_lote, es_ruta_imagen, EXTENSIONES_IMAGEN,
@@ -75,9 +78,7 @@ class LienzoImagen(QLabel):
     def __init__(self):
         super().__init__()
         self.setMinimumSize(450, 500)
-        self.setStyleSheet(
-            "background-color: #1e1e1e; border: 1px solid #444; border-radius: 4px;"
-        )
+        self.setObjectName("lienzo")
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setAcceptDrops(True)
@@ -139,9 +140,10 @@ class LienzoImagen(QLabel):
         if self.imagen_cv is None:
             self.clear()
             self.setText(
-                "<span style='color:#555; font-size:14px'>"
-                "Arrastra una imagen aquí<br>o usa Ctrl+O para abrirla"
-                "</span>"
+                "<div style='color:#8d97a1; font-size:14px'>"
+                "Arrastra una foto aquí,<br>"
+                "pégala con <b>Ctrl+V</b><br>"
+                "o ábrela con <b>Ctrl+O</b></div>"
             )
             return
 
@@ -208,8 +210,8 @@ class LienzoImagen(QLabel):
             painter2.drawText(
                 8, 19,
                 f"Clic en esquina {len(self.puntos) + 1}/4  "
-                f"({restantes} restante{'s' if restantes != 1 else ''})  "
-                f"— Clic derecho o Ctrl+Z para deshacer  — Escape para cancelar"
+                f"({restantes} restante{'s' if restantes != 1 else ''})   ·   "
+                f"Clic derecho o Ctrl+Z: deshacer   ·   Escape: cancelar"
             )
             painter2.end()
 
@@ -293,7 +295,8 @@ class LienzoImagen(QLabel):
 class VentanaPrincipal(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"Escáner de Fotos v{__version__} — Documentos limpios desde el móvil")
+        self.setWindowTitle(f"Escáner de Fotos {__version__}")
+        self.setWindowIcon(QIcon(estilo.ruta_recurso("icono.ico")))
         self.resize(1500, 900)
         self.setAcceptDrops(True)
 
@@ -406,6 +409,13 @@ class VentanaPrincipal(QMainWindow):
     # Construcción de la interfaz
     # ----------------------------------------------------------
 
+    def _estado_recorte(self, texto, ok=False):
+        """Etiqueta de estado del recorte, con los colores del tema."""
+        color = estilo.HTML_OK if ok else estilo.HTML_SUAVE
+        cierre = "  ✓" if ok else ""
+        self.lbl_estado_recorte.setText(
+            f"<span style='color:{color}'>{texto}{cierre}</span>")
+
     def _grupo_plegable(self, titulo, contenido, abierto=False):
         """QGroupBox 'checkable' cuyo contenido se oculta al desmarcar (plegar)."""
         g = QGroupBox(titulo)
@@ -414,8 +424,15 @@ class VentanaPrincipal(QMainWindow):
         lay = QVBoxLayout(g)
         lay.setContentsMargins(6, 4, 6, 4)
         lay.addWidget(contenido)
-        contenido.setVisible(abierto)
-        g.toggled.connect(contenido.setVisible)
+
+        def _aplicar(abierto_):
+            contenido.setVisible(abierto_)
+            g.setProperty("plegado", not abierto_)
+            g.style().unpolish(g)
+            g.style().polish(g)
+
+        g.toggled.connect(_aplicar)
+        _aplicar(abierto)
         return g
 
     def _iniciar_cola(self, rutas):
@@ -543,8 +560,8 @@ class VentanaPrincipal(QMainWindow):
 
         # Columna izquierda: original
         col_izq = QVBoxLayout()
-        lbl_orig = QLabel("<b>📷 Foto original</b>")
-        lbl_orig.setStyleSheet("font-size: 14px; padding: 4px;")
+        lbl_orig = QLabel("Foto original")
+        lbl_orig.setObjectName("tituloLienzo")
         col_izq.addWidget(lbl_orig)
         self.lienzo_original = LienzoImagen()
         self.lienzo_original.puntos_listos.connect(self._al_recibir_puntos_manuales)
@@ -566,8 +583,8 @@ class VentanaPrincipal(QMainWindow):
 
         # Columna derecha: resultado
         col_der = QVBoxLayout()
-        lbl_res = QLabel("<b>✨ Resultado</b>")
-        lbl_res.setStyleSheet("font-size: 14px; padding: 4px;")
+        lbl_res = QLabel("Resultado")
+        lbl_res.setObjectName("tituloLienzo")
         col_der.addWidget(lbl_res)
         self.lienzo_resultado = LienzoImagen()
         col_der.addWidget(self.lienzo_resultado)
@@ -583,13 +600,13 @@ class VentanaPrincipal(QMainWindow):
         panel.setSpacing(6)
 
         # === 1. Cargar ===
-        g1 = QGroupBox("1️⃣  Cargar foto")
+        g1 = QGroupBox("1 · Cargar")
         l1 = QVBoxLayout(g1)
-        btn_abrir = QPushButton("📂  Abrir imagen…  (Ctrl+O)")
+        btn_abrir = QPushButton("📂  Abrir fotos…  (Ctrl+O)")
         btn_abrir.setMinimumHeight(38)
         btn_abrir.clicked.connect(self.abrir_imagen)
         l1.addWidget(btn_abrir)
-        btn_lote = QPushButton("📁  Procesar carpeta por lotes…")
+        btn_lote = QPushButton("📁  Procesar una carpeta entera…")
         btn_lote.clicked.connect(self.procesar_carpeta)
         l1.addWidget(btn_lote)
         panel.addWidget(g1)
@@ -603,40 +620,25 @@ class VentanaPrincipal(QMainWindow):
         l_vig.addWidget(self.chk_vigilar)
         fila_vig = QHBoxLayout()
         self.lbl_vigilada = QLabel()
-        self.lbl_vigilada.setStyleSheet("color:#888; font-size:11px;")
+        self.lbl_vigilada.setObjectName("infoSuave")
         self.lbl_vigilada.setWordWrap(True)
         fila_vig.addWidget(self.lbl_vigilada, 1)
-        btn_vigilada = QPushButton("📁 Elegir")
-        btn_vigilada.setMaximumWidth(90)
+        btn_vigilada = QPushButton("Elegir carpeta")
         btn_vigilada.clicked.connect(self.elegir_carpeta_vigilada)
         fila_vig.addWidget(btn_vigilada)
         l_vig.addLayout(fila_vig)
         panel.addWidget(self._grupo_plegable(
-            "📲  Carpeta vigilada (WhatsApp)", cont_vig, abierto=False))
+            "Carpeta vigilada (WhatsApp)", cont_vig, abierto=False))
 
         self.lbl_cola = QLabel("")
-        self.lbl_cola.setStyleSheet(
-            "background:#243; color:#9f9; padding:5px; border-radius:4px; font-weight:bold;")
+        self.lbl_cola.setObjectName("indicadorCola")
         self.lbl_cola.setVisible(False)
         panel.addWidget(self.lbl_cola)
 
-        # === 2. Rotar ===
-        cont_rot = QWidget()
-        l_rot = QHBoxLayout(cont_rot)
-        l_rot.setContentsMargins(0, 0, 0, 0)
-        btn_rot_izq = QPushButton("⟲ 90° izq")
-        btn_rot_der = QPushButton("⟳ 90° der")
-        btn_rot_180 = QPushButton("⤢ 180°")
-        btn_rot_izq.clicked.connect(lambda: self.rotar_original(270))
-        btn_rot_der.clicked.connect(lambda: self.rotar_original(90))
-        btn_rot_180.clicked.connect(lambda: self.rotar_original(180))
-        l_rot.addWidget(btn_rot_izq); l_rot.addWidget(btn_rot_der); l_rot.addWidget(btn_rot_180)
-        panel.addWidget(self._grupo_plegable("🔄  Rotar", cont_rot, abierto=False))
-
-        # === 3. Recortar y enderezar ===
-        g2 = QGroupBox("2️⃣  Recortar y enderezar")
+        # === 2. Recortar y enderezar (incluye rotación) ===
+        g2 = QGroupBox("2 · Recortar y enderezar")
         l2 = QVBoxLayout(g2)
-        btn_auto = QPushButton("🔍  Detectar automáticamente  (F5)")
+        btn_auto = QPushButton("🔍  Detectar el documento  (F5)")
         btn_auto.setMinimumHeight(38)
         btn_auto.clicked.connect(self.detectar_auto)
         l2.addWidget(btn_auto)
@@ -644,20 +646,35 @@ class VentanaPrincipal(QMainWindow):
         btn_man.setMinimumHeight(38)
         btn_man.clicked.connect(self.iniciar_manual)
         l2.addWidget(btn_man)
-        btn_sin_recortar = QPushButton("↺  Usar sin recortar")
+        btn_sin_recortar = QPushButton("Usar la foto sin recortar")
         btn_sin_recortar.clicked.connect(self.usar_sin_recortar)
         l2.addWidget(btn_sin_recortar)
-        self.lbl_estado_recorte = QLabel("<i style='color:#888'>Sin recortar</i>")
+        fila_rot = QHBoxLayout()
+        btn_rot_izq = QPushButton("⟲ 90°")
+        btn_rot_der = QPushButton("⟳ 90°")
+        btn_rot_180 = QPushButton("180°")
+        btn_rot_izq.setToolTip("Rotar 90° a la izquierda")
+        btn_rot_der.setToolTip("Rotar 90° a la derecha")
+        btn_rot_180.setToolTip("Rotar 180°")
+        btn_rot_izq.clicked.connect(lambda: self.rotar_original(270))
+        btn_rot_der.clicked.connect(lambda: self.rotar_original(90))
+        btn_rot_180.clicked.connect(lambda: self.rotar_original(180))
+        fila_rot.addWidget(btn_rot_izq)
+        fila_rot.addWidget(btn_rot_der)
+        fila_rot.addWidget(btn_rot_180)
+        l2.addLayout(fila_rot)
+        self.lbl_estado_recorte = QLabel()
+        self._estado_recorte("Sin recortar")
         l2.addWidget(self.lbl_estado_recorte)
         panel.addWidget(g2)
 
-        # === 4. Filtro ===
-        g3 = QGroupBox("3️⃣  Tipo de salida")
+        # === 3. Tipo de salida ===
+        g3 = QGroupBox("3 · Tipo de salida")
         l3 = QVBoxLayout(g3)
         self.combo_filtro = QComboBox()
         self.combo_filtro.addItems([
-            "⚪ Blanco y negro (escáner)  — facturas, contratos",
-            "🎨 Color con luz corregida  — DNI, fotos",
+            "⚪ Blanco y negro (escáner) · facturas, contratos",
+            "🎨 Color con luz corregida · DNI, fotos",
             "📷 Color original",
         ])
         self.combo_filtro.setMinimumHeight(34)
@@ -675,22 +692,19 @@ class VentanaPrincipal(QMainWindow):
         self.sld_contraste, fila2 = self._crear_slider("Contraste", -100, 100, 0)
         self.sld_nitidez,   fila3 = self._crear_slider("Nitidez",      0, 100, 0)
         l4.addLayout(fila1); l4.addLayout(fila2); l4.addLayout(fila3)
-        btn_reset = QPushButton("↺  Resetear ajustes  (Ctrl+R)")
+        btn_reset = QPushButton("Resetear ajustes  (Ctrl+R)")
         btn_reset.clicked.connect(self.reset_ajustes)
         l4.addWidget(btn_reset)
-        panel.addWidget(self._grupo_plegable("🎚️  Ajustes finos", cont_aj, abierto=False))
+        panel.addWidget(self._grupo_plegable("Ajustes finos", cont_aj, abierto=False))
 
-        self.btn_terminar = QPushButton("✓  Añadir al PDF y siguiente  →")
+        self.btn_terminar = QPushButton("Añadir al PDF y pasar a la siguiente")
+        self.btn_terminar.setObjectName("btnPrimario")
         self.btn_terminar.setMinimumHeight(46)
-        self.btn_terminar.setStyleSheet(
-            "QPushButton { background-color:#1565c0; color:white; font-size:14px;"
-            " font-weight:bold; border-radius:5px; }"
-            "QPushButton:hover { background-color:#1976d2; }")
         self.btn_terminar.clicked.connect(self.terminar_y_siguiente)
         panel.addWidget(self.btn_terminar)
 
-        # === 6. Guardar ===
-        g5 = QGroupBox("5️⃣  Guardar resultado")
+        # === 4. Guardar ===
+        g5 = QGroupBox("4 · Guardar")
         l5 = QVBoxLayout(g5)
 
         # Prefijo del nombre de archivo: 'Perez_2026-06-10_14-33-12.jpg'
@@ -707,42 +721,38 @@ class VentanaPrincipal(QMainWindow):
 
         # Guardado rápido: destino fijo + nombre por fecha-hora, sin diálogos
         btn_rapido = QPushButton("⚡  Guardado rápido  (Enter)")
+        btn_rapido.setObjectName("btnExito")
         btn_rapido.setMinimumHeight(44)
-        btn_rapido.setStyleSheet(
-            "QPushButton { background-color: #2e7d32; color: white;"
-            " font-size: 14px; font-weight: bold; border-radius: 5px; }"
-            "QPushButton:hover { background-color: #388e3c; }"
-        )
         btn_rapido.clicked.connect(self.guardado_rapido)
         l5.addWidget(btn_rapido)
 
         fila_carpeta = QHBoxLayout()
         self.lbl_carpeta_salida = QLabel()
-        self.lbl_carpeta_salida.setStyleSheet("color:#888; font-size:11px;")
+        self.lbl_carpeta_salida.setObjectName("infoSuave")
         self.lbl_carpeta_salida.setWordWrap(True)
         fila_carpeta.addWidget(self.lbl_carpeta_salida, 1)
-        btn_cambiar_carpeta = QPushButton("📁 Cambiar")
+        btn_cambiar_carpeta = QPushButton("Cambiar")
         btn_cambiar_carpeta.setMaximumWidth(90)
         btn_cambiar_carpeta.clicked.connect(self.elegir_carpeta_salida)
         fila_carpeta.addWidget(btn_cambiar_carpeta)
         l5.addLayout(fila_carpeta)
 
-        btn_jpg = QPushButton("💾  Guardar como… JPG  (Ctrl+S)")
+        btn_jpg = QPushButton("Guardar como JPG…  (Ctrl+S)")
         btn_jpg.setMinimumHeight(36)
         btn_jpg.clicked.connect(lambda: self.guardar("jpg"))
         l5.addWidget(btn_jpg)
-        btn_png = QPushButton("🖼️  Guardar como PNG  (Ctrl+E)")
+        btn_png = QPushButton("Guardar como PNG…  (Ctrl+E)")
         btn_png.setMinimumHeight(36)
         btn_png.clicked.connect(lambda: self.guardar("png"))
         l5.addWidget(btn_png)
-        btn_pdf = QPushButton("📄  Guardar como PDF  (Ctrl+Shift+S)")
+        btn_pdf = QPushButton("Guardar como PDF…  (Ctrl+Shift+S)")
         btn_pdf.setMinimumHeight(36)
         btn_pdf.clicked.connect(lambda: self.guardar("pdf"))
         l5.addWidget(btn_pdf)
         panel.addWidget(g5)
 
-        # === PDF de varias fotos (miniaturas reordenables) ===
-        g6 = QGroupBox("📑  PDF de varias fotos (arrastra para ordenar)")
+        # === 5. PDF de varias fotos (miniaturas reordenables) ===
+        g6 = QGroupBox("5 · PDF de varias fotos")
         l6 = QVBoxLayout(g6)
         self.lista_pdf = QListWidget()
         self.lista_pdf.setViewMode(QListWidget.ViewMode.IconMode)
@@ -752,11 +762,12 @@ class VentanaPrincipal(QMainWindow):
         self.lista_pdf.setSelectionMode(
             QListWidget.SelectionMode.ExtendedSelection)
         self.lista_pdf.setMinimumHeight(130)
+        self.lista_pdf.setToolTip("Arrastra las miniaturas para ordenar las páginas")
         l6.addWidget(self.lista_pdf)
         fila_pdf = QHBoxLayout()
         btn_add_pdf = QPushButton("➕ Añadir")
         btn_add_pdf.clicked.connect(lambda: self.anadir_pagina_pdf())
-        btn_quitar_pdf = QPushButton("🗑️ Quitar")
+        btn_quitar_pdf = QPushButton("Quitar")
         btn_quitar_pdf.clicked.connect(self.quitar_pagina_pdf)
         btn_vaciar_pdf = QPushButton("Vaciar")
         btn_vaciar_pdf.clicked.connect(self.vaciar_paginas_pdf)
@@ -770,7 +781,7 @@ class VentanaPrincipal(QMainWindow):
             "sola hoja A4: cara delantera arriba y trasera abajo.")
         btn_dni.clicked.connect(self.combinar_dni)
         l6.addWidget(btn_dni)
-        btn_exp_pdf = QPushButton("📄  Exportar PDF")
+        btn_exp_pdf = QPushButton("Exportar el PDF…")
         btn_exp_pdf.setMinimumHeight(36)
         btn_exp_pdf.clicked.connect(self.exportar_pdf_multipagina)
         l6.addWidget(btn_exp_pdf)
@@ -824,7 +835,7 @@ class VentanaPrincipal(QMainWindow):
                 # siguiente (si no, la foto anterior quedaría cargada y se
                 # podría añadir al PDF por duplicado).
                 self.statusBar().showMessage(
-                    f"⚠️ {os.path.basename(ruta)} no se pudo abrir ({e}) — "
+                    f"⚠️ {os.path.basename(ruta)} no se pudo abrir ({e}); "
                     "pasando a la siguiente", 8000)
                 QTimer.singleShot(0, self._cargar_siguiente_de_cola)
             else:
@@ -841,7 +852,7 @@ class VentanaPrincipal(QMainWindow):
         self._ruta_origen = ruta_origen or self._ruta_origen
         self.lienzo_original.limpiar_puntos()
         self.lienzo_original.mostrar_imagen(img)
-        self.lbl_estado_recorte.setText("<i style='color:#888'>Sin recortar</i>")
+        self._estado_recorte("Sin recortar")
         self._resetear_sliders()
         self._actualizar_preview_base()
         self.detectar_auto(silencioso=True)
@@ -888,7 +899,7 @@ class VentanaPrincipal(QMainWindow):
         self.imagen_enderezada = None
         self.lienzo_original.limpiar_puntos()
         self.lienzo_original.mostrar_imagen(self.imagen_original)
-        self.lbl_estado_recorte.setText("<i style='color:#888'>Sin recortar</i>")
+        self._estado_recorte("Sin recortar")
         self._actualizar_preview_base()
         self.actualizar_procesado()
         self._actualizar_barra_estado()
@@ -911,9 +922,7 @@ class VentanaPrincipal(QMainWindow):
             return
         self.lienzo_original.mostrar_esquinas(puntos.tolist())
         self.imagen_enderezada = corregir_perspectiva(self.imagen_original, puntos)
-        self.lbl_estado_recorte.setText(
-            "<span style='color:#3a3'>Recorte automático ✓</span>"
-        )
+        self._estado_recorte("Recorte automático", ok=True)
         self._actualizar_preview_base()
         self.actualizar_procesado()
 
@@ -922,18 +931,14 @@ class VentanaPrincipal(QMainWindow):
             QMessageBox.warning(self, "Atención", "Primero abre una imagen.")
             return
         self.lienzo_original.iniciar_seleccion_manual()
-        self.lbl_estado_recorte.setText(
-            "<i>Haz clic en las 4 esquinas del documento…</i>"
-        )
+        self._estado_recorte("Haz clic en las 4 esquinas del documento…")
 
     def _al_recibir_puntos_manuales(self, puntos):
         puntos_np = np.array(puntos, dtype=np.float32)
         self.imagen_enderezada = corregir_perspectiva(
             self.imagen_original, puntos_np
         )
-        self.lbl_estado_recorte.setText(
-            "<span style='color:#3a3'>Recorte manual ✓</span>"
-        )
+        self._estado_recorte("Recorte manual", ok=True)
         self._actualizar_preview_base()
         self.actualizar_procesado()
 
@@ -942,9 +947,7 @@ class VentanaPrincipal(QMainWindow):
             return
         self.imagen_enderezada = None
         self.lienzo_original.limpiar_puntos()
-        self.lbl_estado_recorte.setText(
-            "<span style='color:#888'><i>Sin recortar</i></span>"
-        )
+        self._estado_recorte("Sin recortar")
         self._actualizar_preview_base()
         self.actualizar_procesado()
 
@@ -1027,7 +1030,7 @@ class VentanaPrincipal(QMainWindow):
             )
         else:
             self.lbl_carpeta_salida.setText(
-                "<i>Sin carpeta fija — se preguntará la primera vez</i>"
+                "<i>Sin carpeta fija (se preguntará al guardar)</i>"
             )
 
     def elegir_carpeta_salida(self):
@@ -1320,7 +1323,8 @@ class VentanaPrincipal(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
+    estilo.aplicar_tema(app)
+    app.setWindowIcon(QIcon(estilo.ruta_recurso("icono.ico")))
 
     # Instancia única: evita dos copias abiertas que bloqueen el .exe al actualizar.
     ruta_lock = os.path.join(

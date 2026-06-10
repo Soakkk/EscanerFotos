@@ -61,6 +61,8 @@ jobs:
       - name: Compilar (carpeta) con PyInstaller
         run: |
           pyinstaller --onedir --windowed --name "EscanerFotos" --clean `
+            --icon EscanerFotos/recursos/icono.ico `
+            --add-data "EscanerFotos/recursos;recursos" `
             --collect-all cv2 `
             EscanerFotos/escaner_fotos.py
 

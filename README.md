@@ -8,7 +8,7 @@ Aplicación de escritorio para Windows que convierte fotos de documentos hechas 
 
 ## Captura de pantalla
 
-> Vista lado a lado: foto original del móvil (izquierda) → documento escaneado limpio (derecha).
+![Ventana de EscanerFotos: foto original a la izquierda, panel de pasos en el centro y resultado escaneado a la derecha](docs/ejemplo_captura.png)
 
 ---
 
@@ -126,6 +126,8 @@ Probado en Windows 10 y 11.
 EscanerFotos/
 ├── EscanerFotos/
 │   ├── escaner_fotos.py      ← Interfaz gráfica (ventana, botones, acciones)
+│   ├── estilo.py             ← Tema visual: paleta y hoja de estilos (QSS)
+│   ├── recursos/             ← Icono de la app (y su generador en Pillow)
 │   ├── imagen.py             ← Procesado de imagen (OpenCV/PIL puro, sin Qt)
 │   ├── cola.py               ← Lógica pura de la cola de fotos
 │   ├── actualizador.py       ← Capa Qt del auto-actualizador

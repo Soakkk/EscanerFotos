@@ -35,6 +35,8 @@ pyinstaller ^
     --windowed ^
     --name "EscanerFotos" ^
     --clean ^
+    --icon "recursos\icono.ico" ^
+    --add-data "recursos;recursos" ^
     --hidden-import="PIL._tkinter_finder" ^
     --collect-all cv2 ^
     escaner_fotos.py

@@ -38,3 +38,6 @@ desktop.ini
 !docs/ejemplo_*.jpg
 !docs/ejemplo_*.png
 .venv/
+
+# Recursos del tema y el icono (sí se versionan)
+!EscanerFotos/recursos/*.png
