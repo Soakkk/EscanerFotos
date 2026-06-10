@@ -6,6 +6,7 @@ en silencio. El instalador (Inno Setup) cierra la app, reemplaza y la reabre."""
 import os
 import sys
 import json
+import hashlib
 import tempfile
 import subprocess
 from urllib.request import urlopen, Request
@@ -13,7 +14,9 @@ from urllib.request import urlopen, Request
 from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtWidgets import QMessageBox, QProgressDialog
 
-from actualizador_core import es_mas_nueva, elegir_asset_exe
+from actualizador_core import (
+    es_mas_nueva, elegir_asset_exe, elegir_asset_sha256, parsear_sha256,
+)
 
 API_URL = "https://api.github.com/repos/Soakkk/EscanerFotos/releases/latest"
 
@@ -24,8 +27,8 @@ def esta_empaquetada():
 
 
 class HiloComprobar(QThread):
-    """Comprueba si hay versión nueva (rápido). Emite (version, url, size)."""
-    encontrada = Signal(str, str, int)
+    """Comprueba si hay versión nueva (rápido). Emite (version, url, size, url_sha256)."""
+    encontrada = Signal(str, str, int, str)
 
     def __init__(self, version_local, parent=None):
         super().__init__(parent)
@@ -45,38 +48,62 @@ class HiloComprobar(QThread):
             if not asset:
                 return
 
+            asset_sha = elegir_asset_sha256(release)
+            url_sha = asset_sha["browser_download_url"] if asset_sha else ""
+
             self.encontrada.emit(
-                tag, asset["browser_download_url"], int(asset.get("size") or 0)
+                tag, asset["browser_download_url"],
+                int(asset.get("size") or 0), url_sha
             )
         except Exception:
             pass  # sin internet / error -> silencio
 
 
 class HiloDescarga(QThread):
-    """Descarga el instalador. Emite progreso (0-100) y terminado(ruta|"")."""
+    """Descarga el instalador y verifica su SHA-256 si la release publica el
+    hash. Emite progreso (0-100) y terminado(ruta|"")."""
     progreso = Signal(int)
     terminado = Signal(str)
 
-    def __init__(self, url, size, parent=None):
+    def __init__(self, url, size, url_sha="", parent=None):
         super().__init__(parent)
         self.url = url
         self.size = size
+        self.url_sha = url_sha
+
+    def _hash_esperado(self):
+        """Descarga y parsea el .sha256 de la release; None si no hay."""
+        if not self.url_sha:
+            return None
+        try:
+            req = Request(self.url_sha, headers={"User-Agent": "EscanerFotos"})
+            with urlopen(req, timeout=15) as r:
+                return parsear_sha256(r.read().decode("utf-8", "replace"))
+        except Exception:
+            return None
 
     def run(self):
         destino = os.path.join(tempfile.gettempdir(), "EscanerFotos-Setup.exe")
         try:
+            esperado = self._hash_esperado()
             req = Request(self.url, headers={"User-Agent": "EscanerFotos"})
             bajado = 0
+            digestor = hashlib.sha256()
             with urlopen(req, timeout=60) as r, open(destino, "wb") as f:
                 while True:
                     trozo = r.read(1024 * 256)
                     if not trozo:
                         break
                     f.write(trozo)
+                    digestor.update(trozo)
                     bajado += len(trozo)
                     if self.size:
                         self.progreso.emit(int(bajado * 100 / self.size))
             if self.size and os.path.getsize(destino) != self.size:
+                os.remove(destino)
+                self.terminado.emit("")
+                return
+            if esperado and digestor.hexdigest() != esperado:
                 os.remove(destino)
                 self.terminado.emit("")
                 return
@@ -103,7 +130,7 @@ def conectar(ventana, version_local):
     if not esta_empaquetada():
         return
 
-    def al_encontrar(version, url, size):
+    def al_encontrar(version, url, size, url_sha):
         # Aviso INMEDIATO (no se descarga nada hasta que el usuario acepta).
         resp = QMessageBox.question(
             ventana, "Actualización disponible",
@@ -124,7 +151,7 @@ def conectar(ventana, version_local):
         dlg.setAutoReset(False)
         dlg.setValue(0)
 
-        hilo_dl = HiloDescarga(url, size, parent=ventana)
+        hilo_dl = HiloDescarga(url, size, url_sha, parent=ventana)
 
         def on_terminado(ruta):
             dlg.close()

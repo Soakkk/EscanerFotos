@@ -20,6 +20,8 @@ OutputBaseFilename=EscanerFotos-Setup-{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=EscanerFotos\recursos\icono.ico
+UninstallDisplayIcon={app}\{#MyAppExe}
 
 [Files]
 Source: "dist\EscanerFotos\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion

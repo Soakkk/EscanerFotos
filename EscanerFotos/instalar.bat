@@ -33,13 +33,14 @@ python -m pip install --upgrade pip --quiet
 echo.
 
 echo Instalando librerias (puede tardar 1-3 minutos)...
-echo   - PySide6    (interfaz grafica Qt 6)
-echo   - OpenCV     (procesado de imagen)
-echo   - NumPy      (calculo numerico)
-echo   - Pillow     (guardar PDF y PNG)
+echo   - PySide6      (interfaz grafica Qt 6)
+echo   - OpenCV       (procesado de imagen)
+echo   - NumPy        (calculo numerico)
+echo   - Pillow       (guardar PDF y PNG)
+echo   - pillow-heif  (abrir fotos HEIC de iPhone)
 echo.
 
-python -m pip install --upgrade PySide6 opencv-python numpy Pillow
+python -m pip install --upgrade PySide6 opencv-python numpy Pillow pillow-heif
 if errorlevel 1 (
     echo.
     echo [ERROR] Fallo la instalacion de librerias.

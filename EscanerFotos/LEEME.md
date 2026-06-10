@@ -63,9 +63,17 @@ Flujo típico para una factura o contrato:
 - Rotar 90° / 180° / 270° por si el móvil guardó la foto torcida.
 - 3 modos de salida: B/N escáner, color mejorado, color original.
 - Sliders de brillo, contraste y nitidez con previsualización al instante.
-- Guardar en JPG (calidad 92%), PNG (sin pérdida) o PDF (200 DPI).
+- Guardar en JPG (calidad 95%), PNG (sin pérdida) o PDF (200 DPI; los B/N
+  se incrustan a 1 bit y ocupan poquísimo).
 - **PDF multipágina**: acumula varias páginas y expórtalas en un solo PDF.
+- **DNI 2 en 1**: añade las dos caras y pulsa «🪪 Unir 2 en 1 hoja» para
+  tenerlas juntas en una sola hoja A4, como al fotocopiar un DNI.
+- **Carpeta vigilada**: elige la carpeta donde caen tus fotos de WhatsApp
+  y las nuevas entran solas a la cola de trabajo.
+- **Prefijo**: escribe el cliente o concepto y los archivos se guardan como
+  `Perez_2026-06-10_14-33-12.jpg` en vez de solo la fecha.
 - **Procesado por lotes**: procesa una carpeta entera de fotos de golpe.
+- Abre fotos de iPhone (HEIC/HEIF).
 
 
 ## ¿Y si quiero un `.exe` de verdad?
@@ -84,7 +92,7 @@ Tienes dos opciones:
 
 ```
 EscanerFotos/
-├── escaner_fotos.py    ← El programa (~850 líneas, Python + OpenCV)
+├── escaner_fotos.py    ← La interfaz gráfica (la lógica de imagen está en imagen.py)
 ├── instalar.bat        ← Instalación inicial (una sola vez)
 ├── EscanerFotos.bat    ← Lanzador diario (doble clic aquí)
 ├── crear_exe.bat       ← Generar .exe (opcional)

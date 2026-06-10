@@ -26,3 +26,19 @@ def elegir_asset_exe(release):
         if str(asset.get("name", "")).lower().endswith(".exe"):
             return asset
     return None
+
+
+def elegir_asset_sha256(release):
+    """Devuelve el primer asset cuyo nombre acabe en .sha256, o None."""
+    for asset in (release or {}).get("assets", []):
+        if str(asset.get("name", "")).lower().endswith(".sha256"):
+            return asset
+    return None
+
+
+def parsear_sha256(texto):
+    """Extrae el primer hash SHA-256 (64 caracteres hex) de un texto del
+    estilo 'HASH  EscanerFotos-Setup-2.7.exe'. Devuelve el hash en minúsculas
+    o None si no hay ninguno."""
+    m = re.search(r"\b[0-9a-fA-F]{64}\b", texto or "")
+    return m.group(0).lower() if m else None
