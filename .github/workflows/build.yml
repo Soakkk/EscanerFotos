@@ -1,19 +1,21 @@
-name: Compilar ejecutable Windows
+name: Tests y ejecutable Windows
 
 # Se ejecuta cuando:
-#  - Subes un tag tipo v1.0, v2.0, etc.  -> genera un Release con el .exe
-#  - Lo lanzas manualmente desde la pestaña Actions -> genera un artefacto descargable
+#  - Abres o actualizas un Pull Request -> solo los tests
+#  - Subes un tag tipo v1.0, v2.0, etc.  -> tests + Release con el .exe
+#  - Lo lanzas manualmente desde la pestaña Actions -> tests + artefacto descargable
 on:
   push:
     tags:
       - 'v*'
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  tests:
     runs-on: windows-latest
 
     steps:
@@ -29,12 +31,32 @@ jobs:
       - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller pytest
+          pip install -r requirements.txt pytest
 
       - name: Ejecutar tests
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest
+
+  build:
+    needs: tests
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+
+    steps:
+      - name: Descargar codigo
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
 
       - name: Compilar (carpeta) con PyInstaller
         run: |
