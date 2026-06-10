@@ -29,7 +29,12 @@ jobs:
       - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
-          pip install PySide6 opencv-python numpy Pillow pyinstaller
+          pip install -r requirements.txt pyinstaller pytest
+
+      - name: Ejecutar tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest
 
       - name: Compilar (carpeta) con PyInstaller
         run: |
@@ -45,15 +50,23 @@ jobs:
           Write-Host "Versión detectada: $v"
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=$v instalador.iss
 
+      - name: Calcular SHA-256 del instalador
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem Output/EscanerFotos-Setup-*.exe | Select-Object -First 1
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($exe.Name)" | Out-File -Encoding ascii "$($exe.FullName).sha256"
+          Write-Host "SHA-256: $hash"
+
       - name: Subir instalador como artefacto (siempre)
         uses: actions/upload-artifact@v4
         with:
           name: EscanerFotos-Setup
-          path: Output/EscanerFotos-Setup-*.exe
+          path: Output/EscanerFotos-Setup-*.exe*
 
       - name: Publicar Release con el instalador (solo en tags)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: Output/EscanerFotos-Setup-*.exe
+          files: Output/EscanerFotos-Setup-*.exe*
           generate_release_notes: true

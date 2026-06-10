@@ -7,18 +7,18 @@ tipo escáner: enderezadas, recortadas y con el texto legible.
 
 Sin IA. Basado en OpenCV.
 
-v2.0 — Novedades:
-  • Arrastra y suelta imágenes directamente sobre la ventana
-  • Clic derecho / Escape para deshacer puntos en modo manual
-  • Atajos de teclado: Ctrl+O, Ctrl+S, Ctrl+Shift+S, Ctrl+E, F5
-  • Barra de estado con dimensiones de imagen en tiempo real
-  • Exportar como PNG (sin pérdida de calidad)
-  • PDF multipágina: acumula varias páginas y expórtalas juntas
-  • Procesado por lotes de carpetas completas
+v2.7 — Novedades:
+  • Carpeta vigilada: las fotos nuevas (WhatsApp) entran solas a la cola
+  • Prefijo de nombre de archivo (cliente/concepto) en el guardado
+  • DNI 2 en 1: las dos caras del DNI en una sola hoja A4 del PDF
+  • PDFs en B/N mucho más pequeños (1 bit por píxel, CCITT G4)
+  • Soporte HEIC/HEIF (fotos de iPhone)
+  • La vista previa B/N ahora coincide con el resultado guardado
 """
 
 import sys
 import os
+import re
 from datetime import datetime
 import cv2
 import numpy as np
@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QPushButton, QLabel,
     QVBoxLayout, QHBoxLayout, QFileDialog, QSlider, QComboBox,
     QMessageBox, QGroupBox, QSizePolicy, QProgressDialog, QScrollArea,
-    QListWidget, QListWidgetItem
+    QListWidget, QListWidgetItem, QLineEdit, QCheckBox
 )
 from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QMouseEvent,
@@ -35,14 +35,24 @@ from PySide6.QtGui import (
 )
 from PySide6.QtCore import Qt, Signal, QSettings, QTimer, QSize
 from PySide6.QtCore import QLockFile, QStandardPaths, QByteArray, QBuffer
+from PySide6.QtCore import QFileSystemWatcher
 from version import __version__
 import actualizador
 from imagen import (
-    detectar_documento, corregir_perspectiva, ordenar_puntos,
-    filtro_bn_escaner, filtro_color_mejorado, aplicar_ajustes,
-    rotar_imagen, aplicar_pipeline, leer_imagen, cv_a_pil, procesar_lote,
+    detectar_documento, corregir_perspectiva, rotar_imagen, aplicar_pipeline,
+    leer_imagen, procesar_lote, es_ruta_imagen, EXTENSIONES_IMAGEN,
+    codificar_pagina, decodificar_pagina, pagina_a_pil_pdf, cv_a_pil_pdf,
+    componer_dni,
 )
 from cola import siguiente_de_cola, texto_cola
+
+
+def _rutas_imagen_de(mime):
+    """Rutas de archivos de imagen locales contenidos en un QMimeData."""
+    if not mime.hasUrls():
+        return []
+    return [u.toLocalFile() for u in mime.urls()
+            if u.isLocalFile() and es_ruta_imagen(u.toLocalFile())]
 
 
 # =============================================================
@@ -59,9 +69,8 @@ class LienzoImagen(QLabel):
     - Cancelar modo selección (método público).
     """
     puntos_listos = Signal(list)
-    imagen_soltada = Signal(str)   # ruta del archivo soltado
     puntos_editados = Signal(list)   # 4 puntos tras arrastrar una esquina
-    imagenes_soltadas = Signal(list)   # varias rutas soltadas a la vez
+    imagenes_soltadas = Signal(list)   # rutas de imagen soltadas
 
     def __init__(self):
         super().__init__()
@@ -87,19 +96,13 @@ class LienzoImagen(QLabel):
     # --- Drag & drop ---
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
-            if urls and urls[0].isLocalFile():
-                ext = os.path.splitext(urls[0].toLocalFile())[1].lower()
-                if ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'):
-                    event.acceptProposedAction()
-                    return
-        event.ignore()
+        if _rutas_imagen_de(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def dropEvent(self, event):
-        exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp')
-        rutas = [u.toLocalFile() for u in event.mimeData().urls()
-                 if u.isLocalFile() and u.toLocalFile().lower().endswith(exts)]
+        rutas = _rutas_imagen_de(event.mimeData())
         if rutas:
             self.imagenes_soltadas.emit(rutas)
 
@@ -307,6 +310,18 @@ class VentanaPrincipal(QMainWindow):
         self.settings = QSettings("EscanerFotos", "EscanerFotos")
         self.carpeta_salida = self.settings.value("carpeta_salida", "", str)
 
+        # Carpeta vigilada: las fotos nuevas (p. ej. descargas de WhatsApp)
+        # entran solas a la cola sin tener que arrastrarlas.
+        self.carpeta_vigilada = self.settings.value("carpeta_vigilada", "", str)
+        self._vistos = set()
+        self._watcher = QFileSystemWatcher(self)
+        self._watcher.directoryChanged.connect(self._al_cambiar_carpeta_vigilada)
+        # Espera a que el archivo termine de copiarse antes de encolarlo
+        self._timer_vigia = QTimer(self)
+        self._timer_vigia.setSingleShot(True)
+        self._timer_vigia.setInterval(1500)
+        self._timer_vigia.timeout.connect(self._procesar_carpeta_vigilada)
+
         # Debounce de los sliders para que la vista previa no dé tirones
         self._timer_preview = QTimer(self)
         self._timer_preview.setSingleShot(True)
@@ -325,7 +340,12 @@ class VentanaPrincipal(QMainWindow):
             self.combo_filtro.blockSignals(True)
             self.combo_filtro.setCurrentIndex(idx)
             self.combo_filtro.blockSignals(False)
+        self.txt_prefijo.setText(self.settings.value("prefijo", "", str))
         self._actualizar_label_carpeta()
+        self._actualizar_label_vigilada()
+        if self.settings.value("vigilar", False, bool) \
+                and os.path.isdir(self.carpeta_vigilada):
+            self.chk_vigilar.setChecked(True)
 
     # ----------------------------------------------------------
     # Atajos de teclado
@@ -372,23 +392,13 @@ class VentanaPrincipal(QMainWindow):
     # ----------------------------------------------------------
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
-            if urls and urls[0].isLocalFile():
-                ext = os.path.splitext(urls[0].toLocalFile())[1].lower()
-                if ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'):
-                    event.acceptProposedAction()
-                    return
-        event.ignore()
-
-    def _rutas_imagen_de(self, mime):
-        exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp')
-        return [u.toLocalFile() for u in mime.urls()
-                if u.isLocalFile() and u.toLocalFile().lower().endswith(exts)] \
-            if mime.hasUrls() else []
+        if _rutas_imagen_de(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def dropEvent(self, event):
-        rutas = self._rutas_imagen_de(event.mimeData())
+        rutas = _rutas_imagen_de(event.mimeData())
         if rutas:
             self._iniciar_cola(rutas)
 
@@ -434,16 +444,95 @@ class VentanaPrincipal(QMainWindow):
         self._actualizar_indicador_cola()
 
     def terminar_y_siguiente(self):
-        if self.procesada_full() is None:
+        img = self.procesada_full()
+        if img is None:
             QMessageBox.warning(self, "Atención", "Procesa una imagen primero.")
             return
-        self.anadir_pagina_pdf()
+        self.anadir_pagina_pdf(img)
         if self.cola_total:
             self._cargar_siguiente_de_cola()
 
     def _actualizar_indicador_cola(self):
         self.lbl_cola.setText(texto_cola(self.cola_pos, self.cola_total))
         self.lbl_cola.setVisible(bool(self.lbl_cola.text()))
+
+    def _encolar(self, rutas):
+        """Añade fotos al final de la cola sin pisar la imagen en curso."""
+        rutas = list(rutas)
+        if not rutas:
+            return
+        if self.imagen_original is None and not self.cola:
+            self._iniciar_cola(rutas)
+            return
+        if self.cola_total == 0:
+            # La imagen ya cargada pasa a contar como la 1 de la tanda
+            self.cola_total = 1
+            self.cola_pos = 1
+        self.cola.extend(rutas)
+        self.cola_total += len(rutas)
+        self._actualizar_indicador_cola()
+        n = len(rutas)
+        self.statusBar().showMessage(
+            f"📲 {n} foto{'s' if n != 1 else ''} nueva{'s' if n != 1 else ''} "
+            "en la cola", 5000)
+
+    # ----------------------------------------------------------
+    # Carpeta vigilada (WhatsApp): encola las fotos que aparezcan
+    # ----------------------------------------------------------
+
+    def _actualizar_label_vigilada(self):
+        if self.carpeta_vigilada:
+            self.lbl_vigilada.setText(f"Carpeta: <b>{self.carpeta_vigilada}</b>")
+        else:
+            self.lbl_vigilada.setText("<i>Sin carpeta elegida</i>")
+
+    def elegir_carpeta_vigilada(self):
+        carpeta = QFileDialog.getExistingDirectory(
+            self, "Carpeta a vigilar (p. ej. descargas de WhatsApp)",
+            self.carpeta_vigilada or self._ruta_origen)
+        if carpeta:
+            self.carpeta_vigilada = carpeta
+            self.settings.setValue("carpeta_vigilada", carpeta)
+            self._actualizar_label_vigilada()
+            if self.chk_vigilar.isChecked():
+                self._al_toggle_vigilar(True)   # reengancha el vigilante
+        return bool(self.carpeta_vigilada)
+
+    def _al_toggle_vigilar(self, activo):
+        self.settings.setValue("vigilar", activo)
+        if self._watcher.directories():
+            self._watcher.removePaths(self._watcher.directories())
+        if not activo:
+            return
+        if not self.carpeta_vigilada or not os.path.isdir(self.carpeta_vigilada):
+            if not self.elegir_carpeta_vigilada():
+                self.chk_vigilar.setChecked(False)
+                return
+        # Solo cuentan las fotos que lleguen a partir de ahora
+        self._vistos = set(self._listar_imagenes(self.carpeta_vigilada))
+        self._watcher.addPath(self.carpeta_vigilada)
+        self.statusBar().showMessage(
+            f"📲 Vigilando {self.carpeta_vigilada}", 5000)
+
+    def _listar_imagenes(self, carpeta):
+        try:
+            return [f for f in os.listdir(carpeta) if es_ruta_imagen(f)]
+        except OSError:
+            return []
+
+    def _al_cambiar_carpeta_vigilada(self, _ruta):
+        self._timer_vigia.start()   # debounce: deja terminar la copia
+
+    def _procesar_carpeta_vigilada(self):
+        if not self.chk_vigilar.isChecked() \
+                or not os.path.isdir(self.carpeta_vigilada):
+            return
+        actuales = set(self._listar_imagenes(self.carpeta_vigilada))
+        nuevas = sorted(actuales - self._vistos)
+        self._vistos = actuales
+        if nuevas:
+            self._encolar(
+                [os.path.join(self.carpeta_vigilada, n) for n in nuevas])
 
     def _crear_interfaz(self):
         central = QWidget()
@@ -460,7 +549,6 @@ class VentanaPrincipal(QMainWindow):
         self.lienzo_original = LienzoImagen()
         self.lienzo_original.puntos_listos.connect(self._al_recibir_puntos_manuales)
         self.lienzo_original.puntos_editados.connect(self._al_recibir_puntos_manuales)
-        self.lienzo_original.imagen_soltada.connect(self._cargar_archivo)
         self.lienzo_original.imagenes_soltadas.connect(self._iniciar_cola)
         col_izq.addWidget(self.lienzo_original)
         w_izq = QWidget()
@@ -505,6 +593,26 @@ class VentanaPrincipal(QMainWindow):
         btn_lote.clicked.connect(self.procesar_carpeta)
         l1.addWidget(btn_lote)
         panel.addWidget(g1)
+
+        # === Carpeta vigilada (WhatsApp) ===
+        cont_vig = QWidget()
+        l_vig = QVBoxLayout(cont_vig)
+        l_vig.setContentsMargins(0, 0, 0, 0)
+        self.chk_vigilar = QCheckBox("Vigilancia activa (las fotos nuevas entran solas)")
+        self.chk_vigilar.toggled.connect(self._al_toggle_vigilar)
+        l_vig.addWidget(self.chk_vigilar)
+        fila_vig = QHBoxLayout()
+        self.lbl_vigilada = QLabel()
+        self.lbl_vigilada.setStyleSheet("color:#888; font-size:11px;")
+        self.lbl_vigilada.setWordWrap(True)
+        fila_vig.addWidget(self.lbl_vigilada, 1)
+        btn_vigilada = QPushButton("📁 Elegir")
+        btn_vigilada.setMaximumWidth(90)
+        btn_vigilada.clicked.connect(self.elegir_carpeta_vigilada)
+        fila_vig.addWidget(btn_vigilada)
+        l_vig.addLayout(fila_vig)
+        panel.addWidget(self._grupo_plegable(
+            "📲  Carpeta vigilada (WhatsApp)", cont_vig, abierto=False))
 
         self.lbl_cola = QLabel("")
         self.lbl_cola.setStyleSheet(
@@ -585,6 +693,18 @@ class VentanaPrincipal(QMainWindow):
         g5 = QGroupBox("5️⃣  Guardar resultado")
         l5 = QVBoxLayout(g5)
 
+        # Prefijo del nombre de archivo: 'Perez_2026-06-10_14-33-12.jpg'
+        fila_pref = QHBoxLayout()
+        lbl_pref = QLabel("Prefijo:")
+        fila_pref.addWidget(lbl_pref)
+        self.txt_prefijo = QLineEdit()
+        self.txt_prefijo.setPlaceholderText("cliente o concepto (opcional)")
+        self.txt_prefijo.setClearButtonEnabled(True)
+        self.txt_prefijo.textChanged.connect(
+            lambda t: self.settings.setValue("prefijo", t))
+        fila_pref.addWidget(self.txt_prefijo, 1)
+        l5.addLayout(fila_pref)
+
         # Guardado rápido: destino fijo + nombre por fecha-hora, sin diálogos
         btn_rapido = QPushButton("⚡  Guardado rápido  (Enter)")
         btn_rapido.setMinimumHeight(44)
@@ -629,11 +749,13 @@ class VentanaPrincipal(QMainWindow):
         self.lista_pdf.setIconSize(QSize(80, 104))
         self.lista_pdf.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.lista_pdf.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        self.lista_pdf.setSelectionMode(
+            QListWidget.SelectionMode.ExtendedSelection)
         self.lista_pdf.setMinimumHeight(130)
         l6.addWidget(self.lista_pdf)
         fila_pdf = QHBoxLayout()
         btn_add_pdf = QPushButton("➕ Añadir")
-        btn_add_pdf.clicked.connect(self.anadir_pagina_pdf)
+        btn_add_pdf.clicked.connect(lambda: self.anadir_pagina_pdf())
         btn_quitar_pdf = QPushButton("🗑️ Quitar")
         btn_quitar_pdf.clicked.connect(self.quitar_pagina_pdf)
         btn_vaciar_pdf = QPushButton("Vaciar")
@@ -642,6 +764,12 @@ class VentanaPrincipal(QMainWindow):
         fila_pdf.addWidget(btn_quitar_pdf)
         fila_pdf.addWidget(btn_vaciar_pdf)
         l6.addLayout(fila_pdf)
+        btn_dni = QPushButton("🪪  Unir 2 en 1 hoja (DNI)")
+        btn_dni.setToolTip(
+            "Combina las dos páginas seleccionadas (o las dos últimas) en una "
+            "sola hoja A4: cara delantera arriba y trasera abajo.")
+        btn_dni.clicked.connect(self.combinar_dni)
+        l6.addWidget(btn_dni)
         btn_exp_pdf = QPushButton("📄  Exportar PDF")
         btn_exp_pdf.setMinimumHeight(36)
         btn_exp_pdf.clicked.connect(self.exportar_pdf_multipagina)
@@ -677,10 +805,10 @@ class VentanaPrincipal(QMainWindow):
     # ----------------------------------------------------------
 
     def abrir_imagen(self):
+        patron = " ".join("*" + e for e in EXTENSIONES_IMAGEN)
         rutas, _ = QFileDialog.getOpenFileNames(
             self, "Abrir imágenes", self._ruta_origen,
-            "Imágenes (*.jpg *.jpeg *.png *.bmp *.tiff *.tif *.webp);;"
-            "Todos los archivos (*.*)")
+            f"Imágenes ({patron});;Todos los archivos (*.*)")
         if rutas:
             self._iniciar_cola(rutas)
 
@@ -688,10 +816,24 @@ class VentanaPrincipal(QMainWindow):
         try:
             img = leer_imagen(ruta)
             if img is None:
-                raise ValueError("OpenCV no pudo leer el archivo.")
+                raise ValueError("No se pudo leer el archivo.")
             self._cargar_cv(img, os.path.dirname(ruta))
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo abrir la imagen:\n{e}")
+            if self.cola:
+                # En mitad de una tanda no se interrumpe: avisa y salta a la
+                # siguiente (si no, la foto anterior quedaría cargada y se
+                # podría añadir al PDF por duplicado).
+                self.statusBar().showMessage(
+                    f"⚠️ {os.path.basename(ruta)} no se pudo abrir ({e}) — "
+                    "pasando a la siguiente", 8000)
+                QTimer.singleShot(0, self._cargar_siguiente_de_cola)
+            else:
+                if self.cola_total:
+                    self.cola_total = 0
+                    self.cola_pos = 0
+                    self._actualizar_indicador_cola()
+                QMessageBox.critical(
+                    self, "Error", f"No se pudo abrir la imagen:\n{e}")
 
     def _cargar_cv(self, img, ruta_origen=""):
         self.imagen_original = img
@@ -731,12 +873,10 @@ class VentanaPrincipal(QMainWindow):
                     self._cargar_cv(img)
                     self.statusBar().showMessage("Imagen pegada del portapapeles", 4000)
                     return
-            if md.hasUrls():
-                exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp')
-                for url in md.urls():
-                    if url.isLocalFile() and url.toLocalFile().lower().endswith(exts):
-                        self._cargar_archivo(url.toLocalFile())
-                        return
+            rutas = _rutas_imagen_de(md)
+            if rutas:
+                self._cargar_archivo(rutas[0])
+                return
             self.statusBar().showMessage("El portapapeles no contiene una imagen", 4000)
         except Exception as e:
             self.statusBar().showMessage(f"No se pudo pegar la imagen: {e}", 6000)
@@ -901,9 +1041,17 @@ class VentanaPrincipal(QMainWindow):
             self._actualizar_label_carpeta()
         return bool(self.carpeta_salida)
 
+    def _prefijo_limpio(self):
+        """Prefijo apto para nombre de archivo (sin caracteres prohibidos)."""
+        texto = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "", self.txt_prefijo.text())
+        return texto.strip(" .")
+
     def _nombre_por_fecha(self, carpeta, ext=".jpg"):
-        """Genera 'AAAA-MM-DD_HH-MM-SS.jpg', evitando pisar archivos."""
+        """Genera '[prefijo_]AAAA-MM-DD_HH-MM-SS.jpg', evitando pisar archivos."""
         base = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        prefijo = self._prefijo_limpio()
+        if prefijo:
+            base = f"{prefijo}_{base}"
         ruta = os.path.join(carpeta, base + ext)
         n = 2
         while os.path.exists(ruta):
@@ -944,11 +1092,12 @@ class VentanaPrincipal(QMainWindow):
             return
 
         formatos = {
-            "jpg": ("JPEG (*.jpg)", ".jpg", "documento.jpg"),
-            "png": ("PNG sin pérdida (*.png)", ".png", "documento.png"),
-            "pdf": ("PDF (*.pdf)", ".pdf", "documento.pdf"),
+            "jpg": ("JPEG (*.jpg)", ".jpg"),
+            "png": ("PNG sin pérdida (*.png)", ".png"),
+            "pdf": ("PDF (*.pdf)", ".pdf"),
         }
-        filtro, ext, nombre_def = formatos[formato]
+        filtro, ext = formatos[formato]
+        nombre_def = (self._prefijo_limpio() or "documento") + ext
         carpeta_def = self.carpeta_salida or self._ruta_origen
         ruta, _ = QFileDialog.getSaveFileName(
             self, "Guardar como", os.path.join(carpeta_def, nombre_def), filtro
@@ -974,7 +1123,9 @@ class VentanaPrincipal(QMainWindow):
                     raise RuntimeError("Error codificando PNG")
                 buf.tofile(ruta)
             else:
-                cv_a_pil(img).save(ruta, "PDF", resolution=200.0)
+                # cv_a_pil_pdf incrusta los B/N puros a 1 bit (CCITT G4):
+                # el PDF de una factura pasa de ~1 MB a decenas de KB.
+                cv_a_pil_pdf(img).save(ruta, "PDF", resolution=200.0)
 
             QMessageBox.information(
                 self, "Guardado",
@@ -987,11 +1138,18 @@ class VentanaPrincipal(QMainWindow):
     # PDF multipágina
     # ----------------------------------------------------------
 
-    def anadir_pagina_pdf(self):
-        img = self.procesada_full()
+    def anadir_pagina_pdf(self, img=None):
+        if img is None:
+            img = self.procesada_full()
         if img is None:
             QMessageBox.warning(self, "Atención", "Procesa una imagen primero.")
             return
+        self._insertar_pagina(img)
+        self._actualizar_barra_estado()
+
+    def _insertar_pagina(self, img, fila=None):
+        """Crea el item de página: miniatura + imagen comprimida en memoria
+        (no la imagen entera, que con fotos de móvil son ~35 MB por página)."""
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         h, w = rgb.shape[:2]
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
@@ -999,38 +1157,73 @@ class VentanaPrincipal(QMainWindow):
             80, 104, Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation))
         item = QListWidgetItem(icono, "")
-        item.setData(Qt.ItemDataRole.UserRole, cv_a_pil(img))
-        self.lista_pdf.addItem(item)
+        item.setData(Qt.ItemDataRole.UserRole, codificar_pagina(img))
+        if fila is None:
+            self.lista_pdf.addItem(item)
+        else:
+            self.lista_pdf.insertItem(fila, item)
         self.lista_pdf.setCurrentItem(item)
-        self._actualizar_barra_estado()
 
     def quitar_pagina_pdf(self):
-        fila = self.lista_pdf.currentRow()
-        if fila >= 0:
+        filas = sorted((self.lista_pdf.row(it)
+                        for it in self.lista_pdf.selectedItems()), reverse=True)
+        if not filas and self.lista_pdf.currentRow() >= 0:
+            filas = [self.lista_pdf.currentRow()]
+        for fila in filas:
             self.lista_pdf.takeItem(fila)
         self._actualizar_barra_estado()
+
+    def combinar_dni(self):
+        """Une dos páginas (las 2 seleccionadas, o las 2 últimas) en una sola
+        hoja A4: cara delantera arriba y trasera abajo, como al fotocopiar
+        un DNI."""
+        n = self.lista_pdf.count()
+        if n < 2:
+            QMessageBox.warning(
+                self, "Atención",
+                "Añade primero las dos caras a la lista (botón «➕ Añadir»):\n"
+                "procesa la cara delantera, añádela; luego la trasera, "
+                "añádela, y pulsa este botón.")
+            return
+        filas = sorted(self.lista_pdf.row(it)
+                       for it in self.lista_pdf.selectedItems())
+        if len(filas) != 2:
+            filas = [n - 2, n - 1]
+        datos = [self.lista_pdf.item(f).data(Qt.ItemDataRole.UserRole)
+                 for f in filas]
+        hoja = componer_dni(decodificar_pagina(datos[0]),
+                            decodificar_pagina(datos[1]))
+        self.lista_pdf.takeItem(filas[1])
+        self.lista_pdf.takeItem(filas[0])
+        self._insertar_pagina(hoja, filas[0])
+        self._actualizar_barra_estado()
+        self.statusBar().showMessage(
+            "🪪 Dos páginas unidas en una hoja A4", 5000)
 
     def vaciar_paginas_pdf(self):
         self.lista_pdf.clear()
         self._actualizar_barra_estado()
 
     def exportar_pdf_multipagina(self):
-        paginas = [
-            self.lista_pdf.item(i).data(Qt.ItemDataRole.UserRole)
-            for i in range(self.lista_pdf.count())
-        ]
-        if not paginas:
+        if not self.lista_pdf.count():
             QMessageBox.warning(self, "Atención",
                 "No hay páginas. Añade con «➕ Añadir».")
             return
+        nombre_def = (self._prefijo_limpio() or "documento") + ".pdf"
+        carpeta_def = self.carpeta_salida or self._ruta_origen
         ruta, _ = QFileDialog.getSaveFileName(
             self, "Exportar PDF",
-            os.path.join(self._ruta_origen, "documento.pdf"), "PDF (*.pdf)")
+            os.path.join(carpeta_def, nombre_def), "PDF (*.pdf)")
         if not ruta:
             return
         if not ruta.lower().endswith(".pdf"):
             ruta += ".pdf"
         try:
+            paginas = [
+                pagina_a_pil_pdf(
+                    self.lista_pdf.item(i).data(Qt.ItemDataRole.UserRole))
+                for i in range(self.lista_pdf.count())
+            ]
             paginas[0].save(ruta, "PDF", resolution=200.0,
                             save_all=True, append_images=paginas[1:])
             QMessageBox.information(self, "Exportado",
@@ -1062,11 +1255,7 @@ class VentanaPrincipal(QMainWindow):
             carpeta_sal = carpeta_sal_def
 
         # Contar imágenes
-        extensiones = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'}
-        archivos = [
-            f for f in os.listdir(carpeta_ent)
-            if os.path.splitext(f)[1].lower() in extensiones
-        ]
+        archivos = [f for f in os.listdir(carpeta_ent) if es_ruta_imagen(f)]
         if not archivos:
             QMessageBox.information(
                 self, "Sin imágenes",

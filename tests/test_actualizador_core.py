@@ -42,3 +42,28 @@ def test_elegir_asset_exe_sin_exe_devuelve_none():
 def test_elegir_asset_exe_release_vacia():
     assert elegir_asset_exe({}) is None
 
+
+from actualizador_core import elegir_asset_sha256, parsear_sha256
+
+def test_elegir_asset_sha256_encuentra_el_hash():
+    a = elegir_asset_sha256(
+        _release("EscanerFotos.exe", "EscanerFotos-Setup-2.7.exe.sha256"))
+    assert a is not None and a["name"].endswith(".sha256")
+
+def test_elegir_asset_sha256_sin_hash_devuelve_none():
+    assert elegir_asset_sha256(_release("EscanerFotos.exe")) is None
+
+def test_parsear_sha256_formato_estandar():
+    h = "ab" * 32
+    assert parsear_sha256(f"{h}  EscanerFotos-Setup-2.7.exe\n") == h
+
+def test_parsear_sha256_mayusculas_y_solo_hash():
+    h = "AB" * 32
+    assert parsear_sha256(h) == "ab" * 32
+
+def test_parsear_sha256_invalido():
+    assert parsear_sha256("no hay hash aqui") is None
+    assert parsear_sha256("") is None
+    assert parsear_sha256(None) is None
+    assert parsear_sha256("abc123") is None
+
