@@ -34,9 +34,9 @@ def test_buffer_rgb_a_cv_respeta_padding_y_orden_bgr():
 
 from imagen import aplicar_pipeline
 
-def test_pipeline_tres_modos_conservan_tamano():
+def test_pipeline_cuatro_modos_conservan_tamano():
     img = (np.random.rand(120, 90, 3) * 255).astype(np.uint8)
-    for modo in (0, 1, 2):
+    for modo in (0, 1, 2, 3):
         out = aplicar_pipeline(img, modo, 0, 0, 0)
         assert out.shape == img.shape, f"modo {modo}"
         assert out.dtype == np.uint8
@@ -65,13 +65,6 @@ def _prop_negros(bgr):
     g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     return float((g < 128).mean())
 
-def test_filtro_bn_intensidad_controla_grosor():
-    img = (np.random.rand(90, 120, 3) * 255).astype(np.uint8)
-    baja = filtro_bn_escaner(img, intensidad=10)
-    alta = filtro_bn_escaner(img, intensidad=90)
-    assert baja.shape == img.shape and baja.dtype == np.uint8
-    assert _prop_negros(alta) >= _prop_negros(baja)
-
 
 def _documento_sintetico(w=2800, h=2100, lineas=True):
     """Foto sintética: 'papel' blanco con texto sobre fondo oscuro."""
@@ -86,6 +79,14 @@ def _documento_sintetico(w=2800, h=2100, lineas=True):
     return img, esquinas.astype(np.float32)
 
 
+def test_filtro_bn_intensidad_oscurece():
+    doc, _ = _documento_sintetico(1200, 900)
+    baja = filtro_bn_escaner(doc, intensidad=10)
+    alta = filtro_bn_escaner(doc, intensidad=90)
+    assert baja.shape == doc.shape and baja.dtype == np.uint8
+    assert _prop_negros(alta) >= _prop_negros(baja)
+
+
 def test_filtro_bn_consistente_entre_resoluciones():
     """La vista previa (reducida) y el guardado (tamaño real) deben dar
     una proporción de negro parecida gracias al escalado de parámetros."""
@@ -95,6 +96,47 @@ def test_filtro_bn_consistente_entre_resoluciones():
     p_grande = _prop_negros(filtro_bn_escaner(grande))
     p_pequena = _prop_negros(filtro_bn_escaner(pequena))
     assert abs(p_grande - p_pequena) < 0.03, (p_grande, p_pequena)
+
+
+def _foto_texto_debil(w=1300, h=900):
+    """Página con sombra y líneas de texto finas y tenues (el caso que el
+    filtro antiguo destrozaba)."""
+    img = np.full((h, w), 235, dtype=np.float32)
+    for y in range(200, 700, 50):
+        img[y:y + 2, 150:1100] = 150       # trazos finos, poco contraste
+    xx = np.tile(np.linspace(1.0, 0.55, w, dtype=np.float32), (h, 1))
+    img = (img * xx)
+    img = cv2.GaussianBlur(img, (0, 0), 0.8)
+    return cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_GRAY2BGR)
+
+
+def test_filtro_bn_nitido_rescata_texto_debil_y_fondo_blanco():
+    out = cv2.cvtColor(filtro_bn_escaner(_foto_texto_debil(), 50),
+                       cv2.COLOR_BGR2GRAY)
+    # el fondo queda blanco puro (sin gris ni motas)...
+    assert out[100:180, 200:1000].mean() > 250
+    # ...y las líneas tenues sobreviven claramente más oscuras
+    assert out[200:202, 200:1000].mean() < 140
+
+
+from imagen import filtro_bn_puro, _quitar_motas
+
+def test_filtro_bn_puro_es_binario_y_conserva_texto():
+    doc, _ = _documento_sintetico(1200, 900)
+    out = filtro_bn_puro(doc, 50)
+    g = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+    assert set(np.unique(g).tolist()).issubset({0, 255})
+    assert _prop_negros(out) > 0.005   # las líneas de texto están
+
+def test_quitar_motas_borra_aisladas_y_conserva_puntos_cercanos():
+    bn = np.full((200, 200), 255, dtype=np.uint8)
+    bn[100:103, 40:120] = 0      # trazo grande (texto)
+    bn[95:97, 60:62] = 0         # "tilde" pequeña pegada al trazo
+    bn[20:22, 170:172] = 0       # mota aislada del mismo tamaño
+    out = _quitar_motas(bn, area_min=12, escala=1.0)
+    assert (out[100:103, 40:120] == 0).all()   # el trazo queda
+    assert (out[95:97, 60:62] == 0).all()      # la tilde sobrevive
+    assert (out[20:22, 170:172] == 255).all()  # la mota aislada se borra
 
 
 from imagen import detectar_documento, ordenar_puntos
@@ -127,11 +169,10 @@ def test_es_bilevel():
                           cv2.COLOR_GRAY2BGR)
     assert not es_bilevel(grises)
 
-def test_cv_a_pil_pdf_modo_1_para_bn_y_rgb_para_color():
-    img = (np.random.rand(90, 120, 3) * 255).astype(np.uint8)
-    bn = filtro_bn_escaner(img)
-    assert cv_a_pil_pdf(bn).mode == "1"
-    assert cv_a_pil_pdf(img).mode == "RGB"
+def test_cv_a_pil_pdf_modo_1_para_bn_puro_y_rgb_para_color():
+    doc, _ = _documento_sintetico(1200, 900)
+    assert cv_a_pil_pdf(filtro_bn_puro(doc)).mode == "1"
+    assert cv_a_pil_pdf(doc).mode == "RGB"
 
 def test_cv_a_pil_pdf_conserva_el_contenido():
     bn = np.zeros((40, 60, 3), dtype=np.uint8)
@@ -144,8 +185,8 @@ def test_cv_a_pil_pdf_conserva_el_contenido():
 from imagen import codificar_pagina, decodificar_pagina
 
 def test_codificar_pagina_bn_es_pequena_y_sin_perdida():
-    img = (np.random.rand(300, 400, 3) * 255).astype(np.uint8)
-    bn = filtro_bn_escaner(img)
+    doc, _ = _documento_sintetico(1200, 900)
+    bn = filtro_bn_puro(doc)
     datos = codificar_pagina(bn)
     assert len(datos) < bn.nbytes / 10
     assert np.array_equal(decodificar_pagina(datos), bn)

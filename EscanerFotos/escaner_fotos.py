@@ -7,15 +7,16 @@ tipo escáner: enderezadas, recortadas y con el texto legible.
 
 Sin IA. Basado en OpenCV.
 
-v2.7 — Novedades:
-  • Icono propio y tema visual oscuro coherente (estilo.py)
-  • Panel reordenado en 5 pasos: cargar, recortar, salida, guardar, PDF
-  • Carpeta vigilada: las fotos nuevas (WhatsApp) entran solas a la cola
-  • Prefijo de nombre de archivo (cliente/concepto) en el guardado
-  • DNI 2 en 1: las dos caras del DNI en una sola hoja A4 del PDF
-  • PDFs en B/N mucho más pequeños (1 bit por píxel, CCITT G4)
-  • Soporte HEIC/HEIF (fotos de iPhone)
-  • La vista previa B/N ahora coincide con el resultado guardado
+v2.8 — Novedades:
+  • B/N nítido nuevo (estilo CamScanner): máscara de tinta + contraste
+    adaptativo; texto completo y suave en vez de roto y pixelado
+  • B/N puro tinta: binario de 1 bit mejorado para PDFs mínimos
+  • La intensidad B/N solo se muestra en los modos B/N
+
+v2.7:
+  • Icono propio, tema oscuro coherente y panel en 5 pasos
+  • Carpeta vigilada (WhatsApp), prefijo de archivo, DNI 2 en 1
+  • PDFs B/N a 1 bit (CCITT G4), HEIC, vista previa fiel
 """
 
 import sys
@@ -338,11 +339,14 @@ class VentanaPrincipal(QMainWindow):
 
     def _restaurar_preferencias(self):
         """Aplica las preferencias guardadas a la interfaz ya construida."""
-        idx = self.settings.value("filtro_idx", 0, int)
+        # 'filtro_idx2': en v2.8 cambió la lista de filtros (4 opciones);
+        # la clave nueva evita restaurar un índice de la lista antigua.
+        idx = self.settings.value("filtro_idx2", 0, int)
         if 0 <= idx < self.combo_filtro.count():
             self.combo_filtro.blockSignals(True)
             self.combo_filtro.setCurrentIndex(idx)
             self.combo_filtro.blockSignals(False)
+        self.cont_intensidad.setVisible(idx <= 1)
         self.txt_prefijo.setText(self.settings.value("prefijo", "", str))
         self._actualizar_label_carpeta()
         self._actualizar_label_vigilada()
@@ -673,7 +677,8 @@ class VentanaPrincipal(QMainWindow):
         l3 = QVBoxLayout(g3)
         self.combo_filtro = QComboBox()
         self.combo_filtro.addItems([
-            "⚪ Blanco y negro (escáner) · facturas, contratos",
+            "⚪ B/N nítido · contratos, facturas",
+            "⬛ B/N puro tinta · PDFs mínimos",
             "🎨 Color con luz corregida · DNI, fotos",
             "📷 Color original",
         ])
@@ -681,7 +686,9 @@ class VentanaPrincipal(QMainWindow):
         self.combo_filtro.currentIndexChanged.connect(self._al_cambiar_filtro)
         l3.addWidget(self.combo_filtro)
         self.sld_intensidad_bn, fila_int_bn = self._crear_slider("Intensidad B/N", 0, 100, 50)
-        l3.addLayout(fila_int_bn)
+        self.cont_intensidad = QWidget()
+        self.cont_intensidad.setLayout(fila_int_bn)
+        l3.addWidget(self.cont_intensidad)
         panel.addWidget(g3)
 
         # === 5. Ajustes finos ===
@@ -1016,7 +1023,9 @@ class VentanaPrincipal(QMainWindow):
         self.actualizar_procesado()
 
     def _al_cambiar_filtro(self, idx):
-        self.settings.setValue("filtro_idx", idx)
+        self.settings.setValue("filtro_idx2", idx)
+        # La intensidad solo aplica a los dos modos B/N
+        self.cont_intensidad.setVisible(idx <= 1)
         self.actualizar_procesado()
 
     # ----------------------------------------------------------
