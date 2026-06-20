@@ -21,7 +21,7 @@ Aplicación de escritorio para Windows que convierte fotos de documentos hechas 
 | 🔄 Rotar | 90° / 180° / 270° por si el móvil guardó la foto torcida |
 | ⚪ B/N nítido | Estilo CamScanner: máscara de tinta Sauvola + contraste adaptativo; texto suave y completo, fondo blanco puro |
 | ⬛ B/N puro tinta | Binario de 1 bit con limpieza de motas inteligente; PDFs de decenas de KB (CCITT G4) |
-| 🎨 Color mejorado | CLAHE + balance de blancos gray-world + filtro bilateral |
+| 🎨 Color limpio | Equilibra el blanco con Simplest Color Balance (IPOL 2011) + CLAHE suave; corrige la luz del DNI sin quemar ni virar el color |
 | 📷 Color original | Solo recorte, sin retocar color |
 | 🎚️ Ajustes finos | Brillo, contraste y nitidez con sliders en tiempo real |
 | 📲 Carpeta vigilada | Las fotos que lleguen a una carpeta (p. ej. descargas de WhatsApp) entran solas a la cola |
@@ -59,7 +59,7 @@ Doble clic en `EscanerFotos.bat`.
 2. **🔍 Detectar automáticamente** → `F5`
    - Si falla → **✏️ Marcar 4 esquinas a mano** (clic en cada esquina, clic derecho para deshacer)
    - Si el papel ya llena toda la foto → **↺ Usar sin recortar**
-3. **Tipo de salida:** B/N escáner para documentos, Color mejorado para DNI
+3. **Tipo de salida:** B/N nítido para documentos, Color limpio para DNI
 4. **Ajustes** (opcionales): brillo, contraste, nitidez
 5. **Guardar:** JPG (`Ctrl+S`), PNG (`Ctrl+E`) o PDF (`Ctrl+Shift+S`)
 

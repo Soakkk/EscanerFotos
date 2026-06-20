@@ -37,9 +37,11 @@ Flujo típico para una factura o contrato:
      estilo CamScanner. Es el recomendado.
    - **B/N puro tinta** → solo negro y blanco puros; los PDFs ocupan
      poquísimo. Para archivar mucho volumen.
-   - **Color con luz corregida** → para DNI, fotos con color importante.
+   - **Color limpio** → para DNI y fotos con color: equilibra el blanco y la
+     luz sin quemar. Sube o baja la **Intensidad** según te guste.
    - **Color original** → si solo quieres recortar sin tocar nada más.
 4. **Ajustes finos** (opcional): brillo, contraste, nitidez.
+   Si pegaste una foto que no era, pulsa **🗑️ Quitar la foto actual** y pega otra.
 5. **💾 Guardar** como JPG, PNG o PDF.
 
 
