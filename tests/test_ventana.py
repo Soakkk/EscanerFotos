@@ -71,3 +71,35 @@ def test_encolar_no_pisa_la_imagen_cargada(tmp_path):
     assert v.imagen_original is antes        # sigue la misma imagen en pantalla
     assert len(v.cola) == 2                  # y las nuevas esperan en la cola
     assert v.cola_total == 3
+
+
+def test_quitar_imagen_vacia_la_foto_y_conserva_el_pdf():
+    v = ef.VentanaPrincipal()
+    v._cargar_cv(_foto_documento())
+    assert v.imagen_original is not None
+    assert v.btn_quitar.isEnabled()
+    # Una página ya añadida al PDF NO debe perderse al quitar la foto.
+    v.anadir_pagina_pdf(v.procesada_full())
+    assert v.lista_pdf.count() == 1
+
+    v.quitar_imagen()
+    assert v.imagen_original is None          # la foto se vació
+    assert v.procesada_full() is None         # no hay nada que procesar
+    assert v.lista_pdf.count() == 1           # el PDF se conserva
+    assert not v.btn_quitar.isEnabled()       # botón deshabilitado sin foto
+
+    # Tras quitar, se puede cargar otra con normalidad (no queda 'bloqueada').
+    v._cargar_cv(_foto_documento())
+    assert v.imagen_original is not None
+    assert v.btn_quitar.isEnabled()
+
+
+def test_intensidad_visible_en_modos_bn_y_color():
+    # isHidden() refleja el setVisible directamente (la ventana no se llega a
+    # mostrar en el test offscreen, por eso no se usa isVisible()).
+    v = ef.VentanaPrincipal()
+    for idx in (0, 1, 2):                      # B/N nítido, B/N puro, Color limpio
+        v.combo_filtro.setCurrentIndex(idx)
+        assert not v.cont_intensidad.isHidden()
+    v.combo_filtro.setCurrentIndex(3)          # Color original: sin intensidad
+    assert v.cont_intensidad.isHidden()

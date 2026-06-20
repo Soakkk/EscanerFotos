@@ -7,11 +7,14 @@ tipo escáner: enderezadas, recortadas y con el texto legible.
 
 Sin IA. Basado en OpenCV.
 
-v2.8 — Novedades:
-  • B/N nítido nuevo (estilo CamScanner): máscara de tinta + contraste
-    adaptativo; texto completo y suave en vez de roto y pixelado
-  • B/N puro tinta: binario de 1 bit mejorado para PDFs mínimos
-  • La intensidad B/N solo se muestra en los modos B/N
+v2.9 — Novedades:
+  • Color limpio rehecho (DNI, fotos): equilibra el blanco con Simplest
+    Color Balance; ya no quema ni vira el color como el filtro anterior
+  • Botón «Quitar la foto actual» para vaciar una foto pegada por error
+  • La intensidad ahora también gradúa el filtro de color
+
+v2.8:
+  • B/N nítido (estilo CamScanner) + B/N puro tinta (1 bit)
 
 v2.7:
   • Icono propio, tema oscuro coherente y panel en 5 pasos
@@ -346,7 +349,7 @@ class VentanaPrincipal(QMainWindow):
             self.combo_filtro.blockSignals(True)
             self.combo_filtro.setCurrentIndex(idx)
             self.combo_filtro.blockSignals(False)
-        self.cont_intensidad.setVisible(idx <= 1)
+        self.cont_intensidad.setVisible(idx <= 2)
         self.txt_prefijo.setText(self.settings.value("prefijo", "", str))
         self._actualizar_label_carpeta()
         self._actualizar_label_vigilada()
@@ -377,6 +380,8 @@ class VentanaPrincipal(QMainWindow):
     # ----------------------------------------------------------
 
     def _actualizar_barra_estado(self):
+        if hasattr(self, "btn_quitar"):
+            self.btn_quitar.setEnabled(self.imagen_original is not None)
         if self.imagen_original is None:
             self.statusBar().showMessage(
                 "Arrastra una imagen aquí, usa Ctrl+O para abrir  |  "
@@ -613,6 +618,12 @@ class VentanaPrincipal(QMainWindow):
         btn_lote = QPushButton("📁  Procesar una carpeta entera…")
         btn_lote.clicked.connect(self.procesar_carpeta)
         l1.addWidget(btn_lote)
+        self.btn_quitar = QPushButton("🗑️  Quitar la foto actual")
+        self.btn_quitar.setToolTip(
+            "Vacía la foto cargada para empezar de cero (p. ej. si pegaste la "
+            "que no era). No borra las páginas ya añadidas al PDF.")
+        self.btn_quitar.clicked.connect(self.quitar_imagen)
+        l1.addWidget(self.btn_quitar)
         panel.addWidget(g1)
 
         # === Carpeta vigilada (WhatsApp) ===
@@ -679,13 +690,13 @@ class VentanaPrincipal(QMainWindow):
         self.combo_filtro.addItems([
             "⚪ B/N nítido · contratos, facturas",
             "⬛ B/N puro tinta · PDFs mínimos",
-            "🎨 Color con luz corregida · DNI, fotos",
+            "🎨 Color limpio · DNI, fotos",
             "📷 Color original",
         ])
         self.combo_filtro.setMinimumHeight(34)
         self.combo_filtro.currentIndexChanged.connect(self._al_cambiar_filtro)
         l3.addWidget(self.combo_filtro)
-        self.sld_intensidad_bn, fila_int_bn = self._crear_slider("Intensidad B/N", 0, 100, 50)
+        self.sld_intensidad_bn, fila_int_bn = self._crear_slider("Intensidad", 0, 100, 50)
         self.cont_intensidad = QWidget()
         self.cont_intensidad.setLayout(fila_int_bn)
         l3.addWidget(self.cont_intensidad)
@@ -895,9 +906,36 @@ class VentanaPrincipal(QMainWindow):
             if rutas:
                 self._cargar_archivo(rutas[0])
                 return
-            self.statusBar().showMessage("El portapapeles no contiene una imagen", 4000)
+            self.statusBar().showMessage(
+                "El portapapeles no contiene una imagen "
+                "(si quieres vaciar la foto actual, usa «Quitar la foto actual»)",
+                6000)
         except Exception as e:
             self.statusBar().showMessage(f"No se pudo pegar la imagen: {e}", 6000)
+
+    def quitar_imagen(self):
+        """Vacía la foto cargada y deja la app como recién abierta (sin tocar
+        las páginas ya añadidas al PDF). Resuelve el caso de pegar una imagen
+        equivocada y que se quede 'bloqueada' la anterior."""
+        if self.imagen_original is None:
+            self.statusBar().showMessage("No hay ninguna foto cargada", 3000)
+            return
+        self.imagen_original = None
+        self.imagen_enderezada = None
+        self._preview_base = None
+        self.lienzo_original.cancelar_seleccion()
+        self.lienzo_original.limpiar_puntos()
+        self.lienzo_original.mostrar_imagen(None)
+        self.lienzo_resultado.mostrar_imagen(None)
+        self._estado_recorte("Sin recortar")
+        self._resetear_sliders()
+        # Vacía también la cola de la tanda en curso (las páginas del PDF se quedan)
+        self.cola = []
+        self.cola_total = 0
+        self.cola_pos = 0
+        self._actualizar_indicador_cola()
+        self._actualizar_barra_estado()
+        self.statusBar().showMessage("Foto quitada — pega (Ctrl+V) o abre otra", 4000)
 
     def rotar_original(self, grados):
         if self.imagen_original is None:
@@ -1025,7 +1063,7 @@ class VentanaPrincipal(QMainWindow):
     def _al_cambiar_filtro(self, idx):
         self.settings.setValue("filtro_idx2", idx)
         # La intensidad solo aplica a los dos modos B/N
-        self.cont_intensidad.setVisible(idx <= 1)
+        self.cont_intensidad.setVisible(idx <= 2)
         self.actualizar_procesado()
 
     # ----------------------------------------------------------

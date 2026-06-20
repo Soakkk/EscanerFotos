@@ -340,28 +340,67 @@ def filtro_bn_puro(imagen, intensidad=50):
     return cv2.cvtColor(bn, cv2.COLOR_GRAY2BGR)
 
 
-def filtro_color_mejorado(imagen):
-    """Mejora luz y color manteniendo la imagen en color. Ideal para DNI."""
-    lab = cv2.cvtColor(imagen, cv2.COLOR_BGR2LAB)
+def balance_blancos_scb(imagen, recorte=0.5, suelo=0, techo=255):
+    """Simplest Color Balance (Limare, Lisani, Morel, Petro & Sbert, IPOL
+    2011: https://www.ipol.im/pub/art/2011/llmps-scb/). Por cada canal de
+    color satura el `recorte` % de píxeles más oscuros y el `recorte` % más
+    claros y estira el resto con una transformación afín al rango
+    [suelo, techo]. Equilibra el blanco y realza el contraste sin los virajes
+    de color del 'gris-mundo' y, al saturar solo los extremos, sin quemar.
+
+    `suelo`/`techo` dejan margen en negros y blancos para no reventar la
+    imagen (con 0 y 255 es el algoritmo original). Los percentiles se estiman
+    sobre una copia reducida: rápido e independiente de la resolución."""
+    h, w = imagen.shape[:2]
+    if max(h, w) > 600:
+        r = 600.0 / max(h, w)
+        muestra = cv2.resize(imagen, None, fx=r, fy=r, interpolation=cv2.INTER_AREA)
+    else:
+        muestra = imagen
+    salida = []
+    for c in range(3):
+        canal = imagen[:, :, c].astype(np.float32)
+        lo, hi = np.percentile(muestra[:, :, c], (recorte, 100.0 - recorte))
+        if hi <= lo:
+            salida.append(imagen[:, :, c])
+            continue
+        esc = (canal - lo) * ((techo - suelo) / (hi - lo)) + suelo
+        salida.append(np.clip(esc, 0, 255).astype(np.uint8))
+    return cv2.merge(salida)
+
+
+def filtro_color_mejorado(imagen, intensidad=50):
+    """Color limpio para DNI y fotos: corrige la dominante de luz e iguala el
+    blanco SIN quemar. A diferencia del 'gris-mundo' (que vira los colores) y
+    de la igualación de luz por división (que revienta a blanco las zonas
+    claras del DNI), aquí se usa:
+      1) reducción de ruido conservando bordes (bilateral),
+      2) balance de blancos robusto con Simplest Color Balance, dejando
+         margen en negros (8) y blancos (248) para no reventar,
+      3) realce de contraste local suave (CLAHE sobre la luminancia),
+         mezclado con la original para no exagerar.
+    `intensidad` (0-100) gradúa el realce; 50 = neutro, 0 = casi sin tocar."""
+    t = intensidad / 50.0          # 0..2, 1 = neutro
+
+    base = cv2.bilateralFilter(imagen, 7, 45, 7)
+
+    # Balance de blancos. El techo de blancos se queda SIEMPRE por debajo de
+    # 250 (incluso a intensidad máxima): así un reflejo o el flash no revientan
+    # a blanco puro, que era el origen del 'quemado'. El brillo apenas baja.
+    recorte = 0.3 + 0.4 * min(t, 1.5)        # 0.3 .. 0.9 %
+    techo = 238 + int(10 * min(t, 1.0))      # 238 (suave) .. 248 (fuerte)
+    base = balance_blancos_scb(base, recorte=recorte, suelo=6, techo=techo)
+
+    # Contraste local suave sobre la luminancia, mezclado con la original.
+    lab = cv2.cvtColor(base, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    l = clahe.apply(l)
+    clip = 1.0 + 0.7 * min(t, 1.6)           # 1.0 .. ~2.1
+    clahe = cv2.createCLAHE(clipLimit=clip, tileGridSize=(8, 8))
+    l_eq = clahe.apply(l)
+    peso = 0.35 + 0.30 * min(t, 1.5)         # 0.35 .. 0.80
+    l = cv2.addWeighted(l_eq, peso, l, 1.0 - peso, 0)
     lab = cv2.merge([l, a, b])
-    mejorada = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
-
-    f = mejorada.astype(np.float32)
-    avg_b = float(np.mean(f[:, :, 0]))
-    avg_g = float(np.mean(f[:, :, 1]))
-    avg_r = float(np.mean(f[:, :, 2]))
-    avg = (avg_b + avg_g + avg_r) / 3.0
-    if avg_b > 1 and avg_g > 1 and avg_r > 1:
-        f[:, :, 0] *= avg / avg_b
-        f[:, :, 1] *= avg / avg_g
-        f[:, :, 2] *= avg / avg_r
-    mejorada = np.clip(f, 0, 255).astype(np.uint8)
-
-    mejorada = cv2.bilateralFilter(mejorada, 5, 35, 35)
-    return mejorada
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
 def aplicar_ajustes(imagen, brillo, contraste, nitidez):
@@ -492,8 +531,8 @@ def aplicar_pipeline(base, filtro_idx, brillo, contraste, nitidez, intensidad_bn
         img = filtro_bn_escaner(base, intensidad_bn)
     elif filtro_idx == 1:      # B/N puro tinta (1 bit, PDFs mínimos)
         img = filtro_bn_puro(base, intensidad_bn)
-    elif filtro_idx == 2:      # Color con luz corregida
-        img = filtro_color_mejorado(igualar_iluminacion(base))
+    elif filtro_idx == 2:      # Color limpio (DNI, fotos)
+        img = filtro_color_mejorado(base, intensidad_bn)
     else:                      # Color original
         img = base.copy()
     if brillo or contraste or nitidez:

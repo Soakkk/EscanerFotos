@@ -198,6 +198,51 @@ def test_codificar_pagina_color_recupera_aproximado():
     assert np.abs(out.astype(int) - img.astype(int)).mean() < 3
 
 
+from imagen import balance_blancos_scb, filtro_color_mejorado
+
+def _quemado_pct(img):
+    """% de píxeles blanco puro (los 3 canales >= 250): mide el 'quemado'."""
+    return float((img.min(axis=2) >= 250).mean() * 100)
+
+def test_scb_estira_el_contraste_y_conserva_forma():
+    # Imagen de bajo contraste (valores 100..150): SCB debe ampliarlo.
+    img = (100 + np.random.rand(80, 120, 3) * 50).astype(np.uint8)
+    out = balance_blancos_scb(img, recorte=0.5)
+    assert out.shape == img.shape and out.dtype == np.uint8
+    g_in = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    g_out = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+    assert g_out.std() > g_in.std()      # más contraste
+
+def test_scb_corrige_la_dominante_de_color():
+    # Gris neutro con un velo azul (canal B alto): tras el balance, los tres
+    # canales deben quedar mucho más parecidos en media.
+    img = np.full((60, 60, 3), 128, dtype=np.uint8)
+    img[:, :, 0] = 190                     # dominante azul
+    img[20:40, 20:40] = (210, 150, 150)    # algo de variación para los percentiles
+    out = balance_blancos_scb(img, recorte=0.5)
+    medias = [float(out[:, :, c].mean()) for c in range(3)]
+    assert max(medias) - min(medias) < 40  # la dominante se ha reducido
+
+def test_filtro_color_no_quema_con_reflejo_fuerte():
+    # Documento claro con un reflejo casi blanco: el filtro NO debe reventar
+    # la imagen a blanco (el problema del filtro antiguo).
+    img = np.full((200, 320, 3), (205, 200, 195), dtype=np.uint8)
+    yy, xx = np.mgrid[0:200, 0:320]
+    reflejo = np.exp(-(((xx - 230) ** 2 + (yy - 70) ** 2) / (2 * 60.0 ** 2)))
+    for c in range(3):
+        img[:, :, c] = np.clip(img[:, :, c] + reflejo * 45, 0, 255)
+    for intensidad in (25, 50, 100):
+        out = filtro_color_mejorado(img, intensidad)
+        assert out.shape == img.shape and out.dtype == np.uint8
+        assert _quemado_pct(out) < 2.0, (intensidad, _quemado_pct(out))
+
+def test_filtro_color_intensidad_realza_el_contraste():
+    img = (110 + np.random.rand(120, 160, 3) * 40).astype(np.uint8)
+    suave = cv2.cvtColor(filtro_color_mejorado(img, 10), cv2.COLOR_BGR2GRAY)
+    fuerte = cv2.cvtColor(filtro_color_mejorado(img, 100), cv2.COLOR_BGR2GRAY)
+    assert fuerte.std() >= suave.std()
+
+
 from imagen import componer_dni, A4_ANCHO_200DPI, A4_ALTO_200DPI
 
 def test_componer_dni_dos_caras_en_una_hoja():
