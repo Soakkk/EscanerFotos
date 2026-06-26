@@ -73,6 +73,70 @@ def test_encolar_no_pisa_la_imagen_cargada(tmp_path):
     assert v.cola_total == 3
 
 
+def _crear_fotos(tmp_path, n):
+    rutas = []
+    for i in range(n):
+        ruta = str(tmp_path / f"doc_{i}.png")
+        cv2.imwrite(ruta, _foto_documento())
+        rutas.append(ruta)
+    return rutas
+
+
+def test_cola_visible_con_tanda_y_miniaturas(tmp_path):
+    v = ef.VentanaPrincipal()
+    rutas = _crear_fotos(tmp_path, 4)
+    v._iniciar_cola(rutas)                       # carga la 1ª, 3 a la cola
+    assert v.cola_total == 4 and v.cola_pos == 1
+    assert not v.grupo_cola.isHidden()           # la cola se muestra
+    assert v.lista_cola.count() == 3             # 3 pendientes en la tira
+    # Las miniaturas se generan con el timer; forzamos su generación aquí.
+    for _ in range(6):
+        v._generar_una_miniatura()
+    assert all(r in v._cache_thumbs for r in v.cola)
+
+
+def test_anadir_al_pdf_y_siguiente_avanza_la_cola(tmp_path):
+    v = ef.VentanaPrincipal()
+    v._iniciar_cola(_crear_fotos(tmp_path, 3))
+    v.terminar_y_siguiente()                     # añade 1ª al PDF, carga 2ª
+    assert v.lista_pdf.count() == 1
+    assert v.cola_pos == 2 and v.lista_cola.count() == 1
+    v.terminar_y_siguiente()                     # añade 2ª, carga 3ª (última)
+    assert v.lista_pdf.count() == 2
+    assert v.cola_pos == 3 and v.lista_cola.count() == 0
+    assert not v.grupo_cola.isHidden()           # sigue visible en la última
+
+
+def test_saltar_no_anade_al_pdf_pero_avanza(tmp_path):
+    v = ef.VentanaPrincipal()
+    v._iniciar_cola(_crear_fotos(tmp_path, 3))
+    v._saltar_actual()                           # salta la 1ª sin añadir
+    assert v.lista_pdf.count() == 0
+    assert v.cola_pos == 2 and v.lista_cola.count() == 1
+
+
+def test_reordenar_cola_sincroniza_la_lista(tmp_path):
+    v = ef.VentanaPrincipal()
+    rutas = _crear_fotos(tmp_path, 4)
+    v._iniciar_cola(rutas)                        # cola = rutas[1], [2], [3]
+    # Simula que el usuario reordena: invertimos los items de la lista visual
+    items = [v.lista_cola.takeItem(0) for _ in range(v.lista_cola.count())]
+    for it in reversed(items):
+        v.lista_cola.addItem(it)
+    v._sincronizar_cola_desde_lista()
+    assert v.cola == [rutas[3], rutas[2], rutas[1]]
+
+
+def test_vaciar_cola_conserva_foto_actual(tmp_path):
+    v = ef.VentanaPrincipal()
+    v._iniciar_cola(_crear_fotos(tmp_path, 5))
+    actual = v.imagen_original
+    v._vaciar_cola()
+    assert v.imagen_original is actual           # la foto en pantalla se queda
+    assert v.cola == [] and v.lista_cola.count() == 0
+    assert v.grupo_cola.isHidden()               # sin tanda, se oculta
+
+
 def test_quitar_imagen_vacia_la_foto_y_conserva_el_pdf():
     v = ef.VentanaPrincipal()
     v._cargar_cv(_foto_documento())

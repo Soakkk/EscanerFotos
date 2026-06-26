@@ -63,18 +63,32 @@ def detectar_documento(imagen):
         ratio = 1.0
 
     gris = cv2.cvtColor(img_p, cv2.COLOR_BGR2GRAY)
+    lab = cv2.cvtColor(img_p, cv2.COLOR_BGR2LAB)
     forma = img_p.shape[:2]
     kernel = np.ones((5, 5), np.uint8)
     kernel_g = np.ones((11, 11), np.uint8)
     candidatos = []   # (puntos, peso de la estrategia)
 
-    # Estrategia 1: Canny
+    # Estrategia 1: Canny sobre gris (brillo)
     desenfoque = cv2.GaussianBlur(gris, (5, 5), 0)
     bordes = cv2.Canny(desenfoque, 50, 150)
     bordes = cv2.morphologyEx(bordes, cv2.MORPH_CLOSE, kernel)
     candidatos += [(p, 1.0) for p in _cuadrilateros_en(bordes, forma)]
 
-    # Estrategia 2: Umbral adaptativo invertido
+    # Estrategia 2: bordes por COLOR (no solo por brillo). Un documento con
+    # color sobre un fondo de brillo parecido no deja borde en gris, pero sí
+    # un cambio de tono: se unen los Canny de cada canal BGR y de los canales
+    # a/b de LAB (cromáticos), que capturan cambios de color puros.
+    bordes_color = np.zeros(forma, np.uint8)
+    suave = cv2.GaussianBlur(img_p, (5, 5), 0)
+    for canal in cv2.split(suave):
+        bordes_color = cv2.bitwise_or(bordes_color, cv2.Canny(canal, 40, 120))
+    for canal in (lab[:, :, 1], lab[:, :, 2]):
+        bordes_color = cv2.bitwise_or(bordes_color, cv2.Canny(canal, 25, 80))
+    bordes_color = cv2.morphologyEx(bordes_color, cv2.MORPH_CLOSE, kernel)
+    candidatos += [(p, 1.0) for p in _cuadrilateros_en(bordes_color, forma)]
+
+    # Estrategia 3: Umbral adaptativo invertido
     th = cv2.adaptiveThreshold(
         gris, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY_INV, 31, 10
@@ -82,7 +96,19 @@ def detectar_documento(imagen):
     th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel)
     candidatos += [(p, 0.95) for p in _cuadrilateros_en(th, forma)]
 
-    # Estrategia 3: Máscara HSV (papel blanco = poca saturación)
+    # Estrategia 4: documento = lo que se diferencia del FONDO. El fondo se
+    # estima con el color mediano del borde de la foto (mesa, mano…); el
+    # documento es la región que se aleja de ese color en LAB. Funciona con
+    # documentos de cualquier color, no solo papel blanco.
+    mask_fg = _mascara_primer_plano(lab, forma)
+    mask_fg = cv2.morphologyEx(mask_fg, cv2.MORPH_CLOSE, kernel_g)
+    mask_fg = cv2.morphologyEx(mask_fg, cv2.MORPH_OPEN, kernel_g)
+    candidatos += [(p, 0.92) for p in _cuadrilateros_en(mask_fg, forma)]
+    caja = _caja_mayor_contorno(mask_fg, forma, area_min=0.12)
+    if caja is not None:
+        candidatos.append((caja, 0.78))
+
+    # Estrategia 5: Máscara HSV (papel blanco = poca saturación)
     hsv = cv2.cvtColor(img_p, cv2.COLOR_BGR2HSV)
     s, v = hsv[:, :, 1], hsv[:, :, 2]
     mascara = ((s < 60) & (v > 90)).astype(np.uint8) * 255
@@ -93,7 +119,7 @@ def detectar_documento(imagen):
     if caja is not None:
         candidatos.append((caja, 0.7))
 
-    # Estrategia 4: Otsu + minAreaRect (último recurso)
+    # Estrategia 6: Otsu + minAreaRect (último recurso)
     _, th_g = cv2.threshold(gris, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     th_g = cv2.morphologyEx(th_g, cv2.MORPH_CLOSE, kernel_g)
     caja = _caja_mayor_contorno(th_g, forma, area_min=0.2)
@@ -151,6 +177,21 @@ def _cuadrilateros_en(mascara, forma):
                 resultado.append(aprox.reshape(4, 2).astype(np.float32))
                 break
     return resultado
+
+
+def _mascara_primer_plano(lab, forma, umbral=22):
+    """Máscara (0/255) de la región que se diferencia del fondo. El fondo se
+    estima con el color mediano de los bordes de la imagen (lo que rodea al
+    documento: mesa, mano, encimera…) y se marca como primer plano todo lo
+    que se aleja de ese color en el espacio LAB. Independiente del color del
+    documento."""
+    h, w = forma
+    bordes = np.concatenate([
+        lab[0, :], lab[h - 1, :], lab[:, 0], lab[:, w - 1]
+    ], axis=0).astype(np.float32)
+    fondo = np.median(bordes, axis=0)
+    dist = np.linalg.norm(lab.astype(np.float32) - fondo, axis=2)
+    return (dist > umbral).astype(np.uint8) * 255
 
 
 def _caja_mayor_contorno(mascara, forma, area_min):
@@ -526,6 +567,21 @@ def leer_imagen(ruta):
     return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
 
+def miniatura_archivo(ruta, lado=64):
+    """Miniatura rápida (lado máx. `lado` px) de una imagen de disco para la
+    cola de fotos. Usa el 'draft' de PIL para no decodificar el JPEG a tamaño
+    completo y corrige la orientación EXIF. Devuelve BGR uint8 o None."""
+    try:
+        with Image.open(ruta) as pil:
+            pil.draft("RGB", (lado * 3, lado * 3))
+            pil = ImageOps.exif_transpose(pil).convert("RGB")
+            pil.thumbnail((lado, lado))
+            rgb = np.asarray(pil)
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    except Exception:
+        return None
+
+
 def aplicar_pipeline(base, filtro_idx, brillo, contraste, nitidez, intensidad_bn=50):
     if filtro_idx == 0:        # B/N nítido (texto suave, estilo CamScanner)
         img = filtro_bn_escaner(base, intensidad_bn)
@@ -540,43 +596,3 @@ def aplicar_pipeline(base, filtro_idx, brillo, contraste, nitidez, intensidad_bn
     return img
 
 
-def procesar_lote(carpeta_entrada, carpeta_salida, filtro_idx, brillo, contraste, nitidez, cb_progreso=None):
-    """
-    Procesa todas las imágenes de carpeta_entrada con los ajustes actuales
-    y las guarda como JPG en carpeta_salida.
-    Llama cb_progreso(i, total, nombre) en cada paso si se proporciona.
-    Devuelve (n_ok, n_errores, lista_mensajes_error).
-    """
-    archivos = sorted([
-        f for f in os.listdir(carpeta_entrada)
-        if es_ruta_imagen(f)
-    ])
-    os.makedirs(carpeta_salida, exist_ok=True)
-
-    n_ok, errores = 0, []
-    for i, nombre in enumerate(archivos):
-        if cb_progreso:
-            cb_progreso(i, len(archivos), nombre)
-        try:
-            ruta = os.path.join(carpeta_entrada, nombre)
-            img = leer_imagen(ruta)
-            if img is None:
-                raise ValueError("OpenCV no pudo leer el archivo")
-
-            puntos = detectar_documento(img)
-            if puntos is not None:
-                img = corregir_perspectiva(img, puntos)
-
-            img = aplicar_pipeline(img, filtro_idx, brillo, contraste, nitidez)
-
-            nombre_salida = os.path.splitext(nombre)[0] + ".jpg"
-            ruta_salida = os.path.join(carpeta_salida, nombre_salida)
-            ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])
-            if not ok:
-                raise RuntimeError("cv2.imencode falló")
-            buf.tofile(ruta_salida)
-            n_ok += 1
-        except Exception as e:
-            errores.append(f"{nombre}: {e}")
-
-    return n_ok, len(errores), errores

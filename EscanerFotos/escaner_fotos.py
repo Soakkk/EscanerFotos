@@ -7,11 +7,17 @@ tipo escáner: enderezadas, recortadas y con el texto legible.
 
 Sin IA. Basado en OpenCV.
 
-v2.9 — Novedades:
-  • Color limpio rehecho (DNI, fotos): equilibra el blanco con Simplest
-    Color Balance; ya no quema ni vira el color como el filtro anterior
-  • Botón «Quitar la foto actual» para vaciar una foto pegada por error
-  • La intensidad ahora también gradúa el filtro de color
+v2.10 — Novedades:
+  • Panel reordenado: lo más usado arriba (recortar/enderezar, girar,
+    tipo, ajuste fino); lo poco habitual en «Más opciones»
+  • Cola de fotos con miniaturas: suelta una tanda de WhatsApp y procésalas
+    en cadena (ajusta una, «Añadir al PDF y siguiente» y salta sola)
+  • Detección de documentos con COLOR (no solo papel blanco): bordes por
+    color + segmentación frente al fondo
+  • Fuera el «procesar carpeta entera» (no se usaba)
+
+v2.9:
+  • Color limpio con Simplest Color Balance (no quema) + «Quitar foto»
 
 v2.8:
   • B/N nítido (estilo CamScanner) + B/N puro tinta (1 bit)
@@ -32,7 +38,7 @@ import numpy as np
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QPushButton, QLabel,
     QVBoxLayout, QHBoxLayout, QFileDialog, QSlider, QComboBox,
-    QMessageBox, QGroupBox, QSizePolicy, QProgressDialog, QScrollArea,
+    QMessageBox, QGroupBox, QSizePolicy, QScrollArea,
     QListWidget, QListWidgetItem, QLineEdit, QCheckBox
 )
 from PySide6.QtGui import (
@@ -47,7 +53,7 @@ import actualizador
 import estilo
 from imagen import (
     detectar_documento, corregir_perspectiva, rotar_imagen, aplicar_pipeline,
-    leer_imagen, procesar_lote, es_ruta_imagen, EXTENSIONES_IMAGEN,
+    leer_imagen, es_ruta_imagen, EXTENSIONES_IMAGEN, miniatura_archivo,
     codificar_pagina, decodificar_pagina, pagina_a_pil_pdf, cv_a_pil_pdf,
     componer_dni,
 )
@@ -312,6 +318,13 @@ class VentanaPrincipal(QMainWindow):
         self.cola = []
         self.cola_total = 0
         self.cola_pos = 0
+        self._cache_thumbs = {}      # ruta -> QIcon (miniaturas de la cola)
+
+        # Generador de miniaturas de la cola, una por disparo (no bloquea la UI)
+        self._timer_thumbs = QTimer(self)
+        self._timer_thumbs.setSingleShot(True)
+        self._timer_thumbs.setInterval(30)
+        self._timer_thumbs.timeout.connect(self._generar_una_miniatura)
 
         # Preferencias persistentes entre sesiones
         self.settings = QSettings("EscanerFotos", "EscanerFotos")
@@ -478,9 +491,74 @@ class VentanaPrincipal(QMainWindow):
         if self.cola_total:
             self._cargar_siguiente_de_cola()
 
+    def _saltar_actual(self):
+        """Pasa a la siguiente foto de la tanda sin añadir la actual al PDF."""
+        if self.cola_total:
+            self._cargar_siguiente_de_cola()
+        else:
+            self.statusBar().showMessage("No hay más fotos en la cola", 3000)
+
+    def _vaciar_cola(self):
+        """Descarta las fotos que quedan en cola (no toca la foto actual ni el PDF)."""
+        if not self.cola and self.cola_total <= 1:
+            return
+        self.cola = []
+        self.cola_total = 1 if self.imagen_original is not None else 0
+        self.cola_pos = self.cola_total
+        self._actualizar_indicador_cola()
+        self.statusBar().showMessage("Cola vaciada", 3000)
+
     def _actualizar_indicador_cola(self):
+        # El grupo se ve mientras haya una tanda activa (aunque en la última
+        # foto ya no queden pendientes), para no perder el "Foto X de Y".
         self.lbl_cola.setText(texto_cola(self.cola_pos, self.cola_total))
-        self.lbl_cola.setVisible(bool(self.lbl_cola.text()))
+        self.grupo_cola.setVisible(self.cola_total > 1)
+        self._refrescar_miniaturas_cola()
+
+    def _refrescar_miniaturas_cola(self):
+        """Repuebla la tira de miniaturas con las fotos que quedan en cola.
+        Las miniaturas se generan en segundo plano (un temporizador) para no
+        congelar la ventana al soltar 10 fotos grandes de golpe."""
+        self.lista_cola.blockSignals(True)
+        self.lista_cola.clear()
+        for ruta in self.cola:
+            item = QListWidgetItem(os.path.basename(ruta))
+            item.setData(Qt.ItemDataRole.UserRole, ruta)
+            icono = self._cache_thumbs.get(ruta)
+            if icono is not None:
+                item.setIcon(icono)
+            item.setToolTip(os.path.basename(ruta))
+            self.lista_cola.addItem(item)
+        self.lista_cola.blockSignals(False)
+        if any(r not in self._cache_thumbs for r in self.cola):
+            self._timer_thumbs.start()
+
+    def _generar_una_miniatura(self):
+        """Genera la primera miniatura que falte (una por disparo del timer)."""
+        for fila in range(self.lista_cola.count()):
+            item = self.lista_cola.item(fila)
+            ruta = item.data(Qt.ItemDataRole.UserRole)
+            if ruta in self._cache_thumbs:
+                continue
+            mini = miniatura_archivo(ruta, 64)
+            if mini is None:
+                self._cache_thumbs[ruta] = QIcon()   # evita reintentar en bucle
+            else:
+                rgb = cv2.cvtColor(mini, cv2.COLOR_BGR2RGB)
+                h, w = rgb.shape[:2]
+                qimg = QImage(rgb.data, w, h, 3 * w,
+                              QImage.Format.Format_RGB888).copy()
+                self._cache_thumbs[ruta] = QIcon(QPixmap.fromImage(qimg))
+            item.setIcon(self._cache_thumbs[ruta])
+            self._timer_thumbs.start()   # encadena con la siguiente
+            return
+
+    def _sincronizar_cola_desde_lista(self, *args):
+        """Tras arrastrar para reordenar, rehace self.cola con el nuevo orden."""
+        self.cola = [
+            self.lista_cola.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self.lista_cola.count())
+        ]
 
     def _encolar(self, rutas):
         """Añade fotos al final de la cola sin pisar la imagen en curso."""
@@ -608,16 +686,16 @@ class VentanaPrincipal(QMainWindow):
         panel = QVBoxLayout()
         panel.setSpacing(6)
 
-        # === 1. Cargar ===
-        g1 = QGroupBox("1 · Cargar")
+        # === Cargar ===
+        g1 = QGroupBox("Cargar")
         l1 = QVBoxLayout(g1)
         btn_abrir = QPushButton("📂  Abrir fotos…  (Ctrl+O)")
         btn_abrir.setMinimumHeight(38)
+        btn_abrir.setToolTip(
+            "También puedes arrastrar varias fotos a la vez sobre la ventana, "
+            "o pegar con Ctrl+V.")
         btn_abrir.clicked.connect(self.abrir_imagen)
         l1.addWidget(btn_abrir)
-        btn_lote = QPushButton("📁  Procesar una carpeta entera…")
-        btn_lote.clicked.connect(self.procesar_carpeta)
-        l1.addWidget(btn_lote)
         self.btn_quitar = QPushButton("🗑️  Quitar la foto actual")
         self.btn_quitar.setToolTip(
             "Vacía la foto cargada para empezar de cero (p. ej. si pegaste la "
@@ -626,32 +704,36 @@ class VentanaPrincipal(QMainWindow):
         l1.addWidget(self.btn_quitar)
         panel.addWidget(g1)
 
-        # === Carpeta vigilada (WhatsApp) ===
-        cont_vig = QWidget()
-        l_vig = QVBoxLayout(cont_vig)
-        l_vig.setContentsMargins(0, 0, 0, 0)
-        self.chk_vigilar = QCheckBox("Vigilancia activa (las fotos nuevas entran solas)")
-        self.chk_vigilar.toggled.connect(self._al_toggle_vigilar)
-        l_vig.addWidget(self.chk_vigilar)
-        fila_vig = QHBoxLayout()
-        self.lbl_vigilada = QLabel()
-        self.lbl_vigilada.setObjectName("infoSuave")
-        self.lbl_vigilada.setWordWrap(True)
-        fila_vig.addWidget(self.lbl_vigilada, 1)
-        btn_vigilada = QPushButton("Elegir carpeta")
-        btn_vigilada.clicked.connect(self.elegir_carpeta_vigilada)
-        fila_vig.addWidget(btn_vigilada)
-        l_vig.addLayout(fila_vig)
-        panel.addWidget(self._grupo_plegable(
-            "Carpeta vigilada (WhatsApp)", cont_vig, abierto=False))
-
+        # === Cola de fotos (tanda de WhatsApp) ===
+        self.grupo_cola = QGroupBox("Cola de fotos")
+        lc = QVBoxLayout(self.grupo_cola)
         self.lbl_cola = QLabel("")
         self.lbl_cola.setObjectName("indicadorCola")
-        self.lbl_cola.setVisible(False)
-        panel.addWidget(self.lbl_cola)
+        lc.addWidget(self.lbl_cola)
+        self.lista_cola = QListWidget()
+        self.lista_cola.setViewMode(QListWidget.ViewMode.IconMode)
+        self.lista_cola.setIconSize(QSize(54, 70))
+        self.lista_cola.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.lista_cola.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        self.lista_cola.setMaximumHeight(104)
+        self.lista_cola.setToolTip(
+            "Fotos que faltan por procesar. Arrastra para reordenarlas.")
+        self.lista_cola.model().rowsMoved.connect(self._sincronizar_cola_desde_lista)
+        lc.addWidget(self.lista_cola)
+        fila_cola = QHBoxLayout()
+        btn_saltar = QPushButton("⏭  Saltar esta")
+        btn_saltar.setToolTip("Pasa a la siguiente foto sin añadir esta al PDF.")
+        btn_saltar.clicked.connect(self._saltar_actual)
+        btn_vaciar_cola = QPushButton("Vaciar cola")
+        btn_vaciar_cola.clicked.connect(self._vaciar_cola)
+        fila_cola.addWidget(btn_saltar)
+        fila_cola.addWidget(btn_vaciar_cola)
+        lc.addLayout(fila_cola)
+        self.grupo_cola.setVisible(False)
+        panel.addWidget(self.grupo_cola)
 
-        # === 2. Recortar y enderezar (incluye rotación) ===
-        g2 = QGroupBox("2 · Recortar y enderezar")
+        # === Recortar y enderezar (incluye rotación) ===
+        g2 = QGroupBox("Recortar y enderezar")
         l2 = QVBoxLayout(g2)
         btn_auto = QPushButton("🔍  Detectar el documento  (F5)")
         btn_auto.setMinimumHeight(38)
@@ -683,8 +765,8 @@ class VentanaPrincipal(QMainWindow):
         l2.addWidget(self.lbl_estado_recorte)
         panel.addWidget(g2)
 
-        # === 3. Tipo de salida ===
-        g3 = QGroupBox("3 · Tipo de salida")
+        # === Tipo de salida ===
+        g3 = QGroupBox("Tipo (B/N o color)")
         l3 = QVBoxLayout(g3)
         self.combo_filtro = QComboBox()
         self.combo_filtro.addItems([
@@ -721,8 +803,8 @@ class VentanaPrincipal(QMainWindow):
         self.btn_terminar.clicked.connect(self.terminar_y_siguiente)
         panel.addWidget(self.btn_terminar)
 
-        # === 4. Guardar ===
-        g5 = QGroupBox("4 · Guardar")
+        # === Guardar ===
+        g5 = QGroupBox("Guardar")
         l5 = QVBoxLayout(g5)
 
         # Prefijo del nombre de archivo: 'Perez_2026-06-10_14-33-12.jpg'
@@ -769,8 +851,8 @@ class VentanaPrincipal(QMainWindow):
         l5.addWidget(btn_pdf)
         panel.addWidget(g5)
 
-        # === 5. PDF de varias fotos (miniaturas reordenables) ===
-        g6 = QGroupBox("5 · PDF de varias fotos")
+        # === PDF de varias fotos (miniaturas reordenables) ===
+        g6 = QGroupBox("PDF de varias fotos")
         l6 = QVBoxLayout(g6)
         self.lista_pdf = QListWidget()
         self.lista_pdf.setViewMode(QListWidget.ViewMode.IconMode)
@@ -804,6 +886,25 @@ class VentanaPrincipal(QMainWindow):
         btn_exp_pdf.clicked.connect(self.exportar_pdf_multipagina)
         l6.addWidget(btn_exp_pdf)
         panel.addWidget(g6)
+
+        # === Más opciones (lo poco habitual, plegado) ===
+        cont_mas = QWidget()
+        l_mas = QVBoxLayout(cont_mas)
+        l_mas.setContentsMargins(0, 0, 0, 0)
+        self.chk_vigilar = QCheckBox(
+            "Vigilar una carpeta (WhatsApp): las fotos nuevas entran solas")
+        self.chk_vigilar.toggled.connect(self._al_toggle_vigilar)
+        l_mas.addWidget(self.chk_vigilar)
+        fila_vig = QHBoxLayout()
+        self.lbl_vigilada = QLabel()
+        self.lbl_vigilada.setObjectName("infoSuave")
+        self.lbl_vigilada.setWordWrap(True)
+        fila_vig.addWidget(self.lbl_vigilada, 1)
+        btn_vigilada = QPushButton("Elegir carpeta")
+        btn_vigilada.clicked.connect(self.elegir_carpeta_vigilada)
+        fila_vig.addWidget(btn_vigilada)
+        l_mas.addLayout(fila_vig)
+        panel.addWidget(self._grupo_plegable("Más opciones", cont_mas, abierto=False))
 
         panel.addStretch()
 
@@ -1280,89 +1381,6 @@ class VentanaPrincipal(QMainWindow):
                 f"PDF de {len(paginas)} páginas guardado en:\n{ruta}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo exportar el PDF:\n{e}")
-
-    # ----------------------------------------------------------
-    # Procesado por lotes
-    # ----------------------------------------------------------
-
-    def procesar_carpeta(self):
-        carpeta_ent = QFileDialog.getExistingDirectory(
-            self, "Selecciona la carpeta con las fotos a procesar",
-            self.carpeta_salida or self._ruta_origen
-        )
-        if not carpeta_ent:
-            return
-
-        # Sugerir carpeta de salida automáticamente
-        nombre_salida = os.path.basename(carpeta_ent.rstrip("/\\")) + "_escaneado"
-        carpeta_sal_def = os.path.join(os.path.dirname(carpeta_ent), nombre_salida)
-        carpeta_sal = QFileDialog.getExistingDirectory(
-            self,
-            f"Carpeta de salida (vacío = se creará «{nombre_salida}»)",
-            carpeta_sal_def
-        )
-        if not carpeta_sal:
-            carpeta_sal = carpeta_sal_def
-
-        # Contar imágenes
-        archivos = [f for f in os.listdir(carpeta_ent) if es_ruta_imagen(f)]
-        if not archivos:
-            QMessageBox.information(
-                self, "Sin imágenes",
-                "No se encontraron imágenes en la carpeta seleccionada."
-            )
-            return
-
-        # Diálogo de progreso
-        progreso = QProgressDialog(
-            "Procesando imágenes…", "Cancelar", 0, len(archivos), self
-        )
-        progreso.setWindowTitle("Procesado por lotes")
-        progreso.setWindowModality(Qt.WindowModality.WindowModal)
-        progreso.setMinimumDuration(0)
-
-        cancelado = [False]
-
-        def cb(i, total, nombre):
-            if progreso.wasCanceled():
-                cancelado[0] = True
-                return
-            progreso.setValue(i)
-            progreso.setLabelText(f"Procesando ({i + 1}/{total}):\n{nombre}")
-            QApplication.processEvents()
-
-        filtro_idx = self.combo_filtro.currentIndex()
-        b = self.sld_brillo.value()
-        c = self.sld_contraste.value()
-        n_sld = self.sld_nitidez.value()
-
-        try:
-            n_ok, n_err, errores = procesar_lote(
-                carpeta_ent, carpeta_sal, filtro_idx, b, c, n_sld, cb
-            )
-        except Exception as e:
-            progreso.close()
-            QMessageBox.critical(self, "Error", f"Error durante el procesado:\n{e}")
-            return
-
-        progreso.setValue(len(archivos))
-        progreso.close()
-
-        if cancelado[0]:
-            msg = f"Procesado cancelado.\n{n_ok} imágenes procesadas."
-        else:
-            msg = (
-                f"Procesado completado.\n\n"
-                f"✅ {n_ok} imagen{'es' if n_ok != 1 else ''} procesada{'s' if n_ok != 1 else ''}\n"
-            )
-            if n_err:
-                msg += f"❌ {n_err} error{'es' if n_err != 1 else ''}:\n" + "\n".join(errores[:5])
-                if len(errores) > 5:
-                    msg += f"\n… y {len(errores) - 5} más."
-            msg += f"\n\nGuardadas en:\n{carpeta_sal}"
-
-        QMessageBox.information(self, "Lotes finalizado", msg)
-
 
 # =============================================================
 # ==========================   MAIN   =========================

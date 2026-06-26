@@ -155,6 +155,40 @@ def test_detectar_documento_imagen_plana_devuelve_none():
     img = np.full((600, 800, 3), 128, dtype=np.uint8)
     assert detectar_documento(img) is None
 
+def test_detectar_documento_de_color_sobre_fondo_de_brillo_parecido():
+    # Documento azulado sobre fondo beige con brillo casi idéntico: en gris
+    # no hay borde, solo cambio de color. Debe detectarse igual.
+    W, H = 1200, 900
+    img = np.full((H, W, 3), (180, 200, 212), np.uint8)        # beige (BGR)
+    esquinas = np.array([[W * 0.18, H * 0.14], [W * 0.84, H * 0.17],
+                         [W * 0.80, H * 0.88], [W * 0.14, H * 0.85]], np.int32)
+    cv2.fillPoly(img, [esquinas], (225, 205, 170))             # documento azul
+    for i, y in enumerate(range(int(H * 0.4), int(H * 0.8), 40)):
+        col = [(40, 40, 160), (40, 120, 40), (120, 60, 20)][i % 3]
+        cv2.line(img, (int(W * 0.22), y), (int(W * 0.74), y), col, 6)
+    gris = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    assert abs(int(gris[450, 480]) - int(gris[5, 5])) < 12     # casi sin borde en gris
+    pts = detectar_documento(img)
+    assert pts is not None
+    det = ordenar_puntos(np.array(pts, np.float32))
+    esp = ordenar_puntos(esquinas.astype(np.float32))
+    diag = (H ** 2 + W ** 2) ** 0.5
+    for d, e in zip(det, esp):
+        assert np.linalg.norm(d - e) < diag * 0.04, (d, e)
+
+
+from imagen import miniatura_archivo
+
+def test_miniatura_archivo(tmp_path):
+    ruta = str(tmp_path / "foto.png")
+    cv2.imwrite(ruta, (np.random.rand(800, 1200, 3) * 255).astype(np.uint8))
+    mini = miniatura_archivo(ruta, 64)
+    assert mini is not None and mini.dtype == np.uint8
+    assert max(mini.shape[:2]) <= 64 and mini.shape[2] == 3
+
+def test_miniatura_archivo_ruta_invalida():
+    assert miniatura_archivo("/no/existe/foto.jpg") is None
+
 
 from imagen import es_bilevel, cv_a_pil_pdf
 
