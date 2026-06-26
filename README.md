@@ -16,7 +16,8 @@ Aplicación de escritorio para Windows que convierte fotos de documentos hechas 
 
 | Función | Descripción |
 |---|---|
-| 🔍 Detección automática | 4 estrategias (Canny, umbral adaptativo, HSV, Otsu); se elige el mejor candidato por puntuación |
+| 🔍 Detección automática | 6 estrategias (bordes por brillo y por **color**, umbral adaptativo, segmentación frente al fondo, HSV, Otsu); se elige el mejor candidato por puntuación. Funciona también con documentos de color, no solo papel blanco |
+| 🧺 Cola en cadena | Suelta una tanda de fotos: se procesan una a una con miniaturas; ajustas y «Añadir al PDF y siguiente» salta sola a la próxima |
 | ✏️ Selección manual | Clic en las 4 esquinas; clic derecho / Escape para deshacer |
 | 🔄 Rotar | 90° / 180° / 270° por si el móvil guardó la foto torcida |
 | ⚪ B/N nítido | Estilo CamScanner: máscara de tinta Sauvola + contraste adaptativo; texto suave y completo, fondo blanco puro |
@@ -30,8 +31,7 @@ Aplicación de escritorio para Windows que convierte fotos de documentos hechas 
 | 💾 JPG | Calidad 95% |
 | 🖼️ PNG | Sin pérdida de calidad |
 | 📄 PDF | Página única o multipágina; los B/N se incrustan a 1 bit (CCITT G4): ocupan decenas de KB |
-| 📁 Lotes | Procesa una carpeta entera de golpe |
-| ↕️ Drag & drop | Arrastra la imagen directamente sobre la ventana |
+| ↕️ Drag & drop | Arrastra una o varias fotos directamente sobre la ventana |
 | 📱 HEIC | Abre fotos de iPhone (HEIC/HEIF) |
 
 ---
@@ -63,10 +63,18 @@ Doble clic en `EscanerFotos.bat`.
 4. **Ajustes** (opcionales): brillo, contraste, nitidez
 5. **Guardar:** JPG (`Ctrl+S`), PNG (`Ctrl+E`) o PDF (`Ctrl+Shift+S`)
 
+### Tanda de fotos de WhatsApp (cola en cadena)
+
+1. Selecciona las fotos en la carpeta de descargas y **arrástralas todas a la vez** sobre la ventana (o ábrelas con `Ctrl+O`).
+2. Se carga la primera y el resto aparece como **miniaturas en «Cola de fotos»**.
+3. Recorta/ajusta la actual y pulsa **«Añadir al PDF y pasar a la siguiente»**: la próxima foto se carga sola.
+4. Repite hasta la última y pulsa **Exportar el PDF**.
+   - **Saltar esta** descarta la foto actual sin añadirla. Puedes **arrastrar las miniaturas** para reordenar la cola.
+
 ### PDF con varias páginas
 
-1. Procesa cada página y pulsa **➕ Añadir página actual** para ir añadiéndolas a la cola.
-2. Cuando tengas todas, pulsa **📄 Exportar PDF multipágina**.
+1. Procesa cada página y pulsa **➕ Añadir** para ir añadiéndolas a la lista del PDF.
+2. Cuando tengas todas, pulsa **Exportar el PDF**.
 
 ### DNI: las dos caras en una sola hoja
 
@@ -78,13 +86,9 @@ Doble clic en `EscanerFotos.bat`.
 
 ### Carpeta vigilada (WhatsApp)
 
-En **📲 Carpeta vigilada** elige la carpeta donde guardas las fotos que te
-llegan (p. ej. la de descargas de WhatsApp) y activa la vigilancia: cada foto
+En **Más opciones → Vigilar una carpeta** elige la carpeta donde guardas las
+fotos que te llegan (p. ej. la de descargas de WhatsApp) y actívala: cada foto
 nueva entra sola a la cola de trabajo, sin arrastrar nada.
-
-### Procesar carpeta entera
-
-Pulsa **📁 Procesar carpeta por lotes…**, elige la carpeta de entrada y la de salida. Aplica automáticamente los ajustes actuales a todas las imágenes.
 
 ---
 

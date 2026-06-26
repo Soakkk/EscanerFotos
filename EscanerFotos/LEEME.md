@@ -44,6 +44,13 @@ Flujo típico para una factura o contrato:
    Si pegaste una foto que no era, pulsa **🗑️ Quitar la foto actual** y pega otra.
 5. **💾 Guardar** como JPG, PNG o PDF.
 
+### Una tanda de fotos de WhatsApp de un tirón
+Arrastra **varias fotos a la vez** sobre la ventana. Se carga la primera y el
+resto queda en **«Cola de fotos»** con miniaturas. Ajusta la actual y pulsa
+**«Añadir al PDF y pasar a la siguiente»**: salta sola a la próxima. Al acabar,
+**Exportar el PDF**. «Saltar esta» descarta una sin añadirla; arrastra las
+miniaturas para reordenar.
+
 
 ## Atajos de teclado
 
@@ -120,9 +127,8 @@ Probado en Windows 10 y 11.
 
 El archivo `escaner_fotos.py` está dividido en tres bloques bien marcados:
 
-1. **Funciones de procesado** → toda la lógica de imagen. Pura, sin GUI.
-   Aquí tocas para mejorar detección, añadir filtros, etc. Incluye
-   `procesar_lote()` para el modo por lotes.
+1. **Funciones de procesado** (`imagen.py`) → toda la lógica de imagen. Pura,
+   sin GUI. Aquí tocas para mejorar la detección, los filtros, etc.
 
 2. **LienzoImagen** (clase QLabel personalizada) → widget que muestra
    imágenes, soporta drag&drop y permite clicar para marcar puntos.
